@@ -1,0 +1,16 @@
+{
+  "name": "atlas-os",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Atlas — a Knowledge Operating System (AI-first, local-first, markdown-first).",
+  "scripts": {
+    "setup": "npm --prefix tools/atlas-cli install",
+    "atlas:validate": "tools/atlas-cli/node_modules/.bin/tsx tools/atlas-cli/src/cli.ts validate vault-prototype",
+    "atlas:id": "tools/atlas-cli/node_modules/.bin/tsx tools/atlas-cli/src/cli.ts id",
+    "atlas:new": "tools/atlas-cli/node_modules/.bin/tsx tools/atlas-cli/src/cli.ts new",
+    "atlas:index": "tools/atlas-cli/node_modules/.bin/tsx tools/atlas-cli/src/cli.ts index vault-prototype",
+    "atlas:context": "tools/atlas-cli/node_modules/.bin/tsx tools/atlas-cli/src/cli.ts context",
+    "atlas:activation": "tools/atlas-cli/node_modules/.bin/tsx tools/atlas-cli/src/cli.ts activation vault-prototype",
+    "test": "tools/atlas-cli/node_modules/.bin/vitest run --root tools/atlas-cli"
+  }
+}

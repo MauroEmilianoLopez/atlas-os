@@ -1,0 +1,16 @@
+# --- Atlas generated / regenerable (fuente de verdad: regenerable, no se versiona) ---
+vault-prototype/.atlas/index/
+vault-prototype/.atlas/cache/
+
+# --- temp / OS ---
+*.tmp
+.DS_Store
+
+# --- Obsidian (no versionar el workspace local; sí el resto de config si se decide) ---
+.obsidian/workspace.json
+
+# NO ignorar archivos Markdown: el conocimiento ES el repo.
+
+# --- P1: node toolchain ---
+node_modules/
+tools/atlas-cli/node_modules/

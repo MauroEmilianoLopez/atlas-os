@@ -1,0 +1,29 @@
+{
+  "name": "atlas-cli",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Atlas Validator & Generator (P1) — verifies Atlas conventions and scaffolds Knowledge Objects.",
+  "bin": {
+    "atlas": "src/cli.ts"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "commander": "^12.1.0",
+    "fast-glob": "^3.3.2",
+    "gray-matter": "^4.0.3",
+    "js-yaml": "^4.1.0",
+    "ulid": "^2.3.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.2",
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.5",
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "^22.9.0"
+  }
+}
