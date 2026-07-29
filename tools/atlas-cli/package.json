@@ -9,7 +9,15 @@
   },
   "scripts": {
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "validate": "tsx src/cli.ts validate ../../vault-prototype",
+    "id": "tsx src/cli.ts id",
+    "new": "tsx src/cli.ts new --vault ../../vault-prototype",
+    "index": "tsx src/cli.ts index ../../vault-prototype",
+    "context": "tsx scripts/context.ts",
+    "activation": "tsx src/cli.ts activation ../../vault-prototype",
+    "health": "npm run validate && npm run index && npm run activation"
   },
   "dependencies": {
     "commander": "^12.1.0",

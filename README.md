@@ -176,6 +176,47 @@ Valida: YAML, unicidad de IDs, prefijos por tipo, tipos y lifecycle del dominio,
 fuertes, y campos derivados escritos a mano. No es MCP server ni Context Engine — solo verifica
 que Atlas respeta sus propias reglas.
 
+## Windows: instalación y verificación
+
+### Requisitos previos
+
+- Node.js 22 LTS y npm incluidos en la instalación. Confirmalo con `node --version` y
+  `npm --version`.
+- Un clon limpio del repositorio. No necesitás instalar `tsx`, TypeScript ni Vitest de forma
+  global.
+
+Desde PowerShell, en la raíz del repositorio, instalá las dependencias con el lockfile anidado:
+
+```powershell
+npm run setup
+```
+
+Después ejecutá la verificación completa. Cada comando devuelve un error si falla, por lo que la
+secuencia se puede usar igual en automatización:
+
+```powershell
+npm test
+npm run typecheck
+npm run atlas:validate
+npm run atlas:index
+npm run atlas:activation
+npm run atlas:health
+```
+
+`atlas:index` genera archivos regenerables en `vault-prototype/.atlas/index/` y
+`atlas:activation` actualiza `vault-prototype/.atlas/cache/`; ambos están ignorados por Git.
+`atlas:health` ejecuta validación, índice y activación en ese orden.
+
+### Diagnósticos habituales
+
+- **Node.js o npm no están disponibles:** instalá Node.js 22 LTS, cerrá y abrí PowerShell, y
+  volvé a comprobar las versiones.
+- **no se instalaron las dependencias:** ejecutá `npm run setup` antes de correr tests, typecheck
+  o comandos Atlas. No instales herramientas globales como sustituto.
+- **El lockfile falla durante la instalación:** asegurate de estar en un clon limpio y ejecutá
+  `npm run setup`; ese comando usa el `package-lock.json` de `tools/atlas-cli`. Si persiste,
+  revisá la versión de npm incluida con Node.js 22 y el mensaje exacto de `npm ci`.
+
 ## P2 — Index Builder
 
 El primer índice externo regenerable, primer ladrillo del futuro Context Engine. Documentación

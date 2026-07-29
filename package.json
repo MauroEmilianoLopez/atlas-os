@@ -4,13 +4,15 @@
   "private": true,
   "description": "Atlas — a Knowledge Operating System (AI-first, local-first, markdown-first).",
   "scripts": {
-    "setup": "npm --prefix tools/atlas-cli install",
-    "atlas:validate": "tools/atlas-cli/node_modules/.bin/tsx tools/atlas-cli/src/cli.ts validate vault-prototype",
-    "atlas:id": "tools/atlas-cli/node_modules/.bin/tsx tools/atlas-cli/src/cli.ts id",
-    "atlas:new": "tools/atlas-cli/node_modules/.bin/tsx tools/atlas-cli/src/cli.ts new",
-    "atlas:index": "tools/atlas-cli/node_modules/.bin/tsx tools/atlas-cli/src/cli.ts index vault-prototype",
-    "atlas:context": "tools/atlas-cli/node_modules/.bin/tsx tools/atlas-cli/src/cli.ts context",
-    "atlas:activation": "tools/atlas-cli/node_modules/.bin/tsx tools/atlas-cli/src/cli.ts activation vault-prototype",
-    "test": "tools/atlas-cli/node_modules/.bin/vitest run --root tools/atlas-cli"
+    "setup": "npm ci --prefix tools/atlas-cli",
+    "test": "npm --prefix tools/atlas-cli run test --",
+    "typecheck": "npm --prefix tools/atlas-cli run typecheck --",
+    "atlas:validate": "npm --prefix tools/atlas-cli run validate --",
+    "atlas:id": "npm --prefix tools/atlas-cli run id --",
+    "atlas:new": "npm --prefix tools/atlas-cli run new --",
+    "atlas:index": "npm --prefix tools/atlas-cli run index --",
+    "atlas:context": "npm --prefix tools/atlas-cli run context --",
+    "atlas:activation": "npm --prefix tools/atlas-cli run activation --",
+    "atlas:health": "npm --prefix tools/atlas-cli run health --"
   }
 }

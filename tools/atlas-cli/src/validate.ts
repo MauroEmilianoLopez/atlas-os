@@ -1,5 +1,6 @@
 // validate.ts — the core validator. Runs all checks over a vault and returns issues + stats.
 
+import { existsSync } from "node:fs";
 import { parseFile, findMarkdown } from "./parser.js";
 import { commonFrontmatter, NON_KO_TYPES } from "./schemas.js";
 import { extractRelations } from "./relations.js";
@@ -30,6 +31,19 @@ export interface ValidationResult {
 }
 
 export function validateVault(vaultRoot: string): ValidationResult {
+  if (!existsSync(vaultRoot)) {
+    return {
+      ok: false,
+      filesScanned: 0,
+      knowledgeObjects: 0,
+      relationsChecked: 0,
+      taskRefsChecked: 0,
+      taskLogs: 0,
+      errors: [{ level: "error", file: vaultRoot, message: `Vault path does not exist: ${vaultRoot}. Check the path and try again.` }],
+      warnings: [],
+    };
+  }
+
   const files = findMarkdown(vaultRoot);
   const errors: Issue[] = [];
   const warnings: Issue[] = [];

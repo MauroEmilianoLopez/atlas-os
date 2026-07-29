@@ -29,6 +29,20 @@ describe("validateVault", () => {
     expect(r.errors).toHaveLength(0);
   });
 
+  it("fails with an actionable error when the vault path does not exist", () => {
+    const missingVault = path.join(root, "missing-vault");
+    const r = validateVault(missingVault);
+
+    expect(r.ok).toBe(false);
+    expect(r.errors).toEqual([
+      {
+        level: "error",
+        file: missingVault,
+        message: `Vault path does not exist: ${missingVault}. Check the path and try again.`,
+      },
+    ]);
+  });
+
   it("detects a duplicate id", () => {
     write("knowledge/concepts/a.md", ko("ko_dup", "concept"));
     write("knowledge/concepts/b.md", ko("ko_dup", "concept"));

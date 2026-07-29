@@ -1,0 +1,38 @@
+name: Cross-platform verification
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  verify:
+    name: ${{ matrix.os }} / Node ${{ matrix.node }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        node: [22]
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: tools/atlas-cli/package-lock.json
+      - name: Install nested CLI dependencies
+        run: npm ci --prefix tools/atlas-cli
+      - name: Run tests
+        run: npm test
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Validate Atlas vault
+        run: npm run atlas:validate
+      - name: Build Atlas index
+        run: npm run atlas:index
+      - name: Compute Atlas activation
+        run: npm run atlas:activation
+      - name: Run Atlas health checks
+        run: npm run atlas:health
