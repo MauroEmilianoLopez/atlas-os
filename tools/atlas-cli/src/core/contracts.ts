@@ -52,8 +52,23 @@ export interface ValidationReport {
 export interface AtlasIndex {
   readonly objects: readonly KnowledgeObject[];
   readonly relations: readonly Relation[];
+  readonly graph: AtlasGraph;
   readonly tasks: readonly TaskRecord[];
+  readonly stats: AtlasIndexStats;
   readonly generatedAt: string;
+}
+
+export interface AtlasGraph {
+  readonly nodes: Readonly<Record<string, string>>;
+  readonly edges: Readonly<Record<string, readonly string[]>>;
+  readonly reverseEdges: Readonly<Record<string, readonly string[]>>;
+}
+
+export interface AtlasIndexStats {
+  readonly objects: number;
+  readonly relations: number;
+  readonly tasks: number;
+  readonly types: Readonly<Record<string, number>>;
 }
 
 export interface ContextQuery {
