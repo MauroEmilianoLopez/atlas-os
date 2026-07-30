@@ -4,6 +4,9 @@ import os from "node:os";
 import path from "node:path";
 import { validateVault } from "../src/validate.js";
 import { collectTaskIds } from "../src/task-log.js";
+import { validateKnowledgeBase } from "../src/core/validate.js";
+import { SourceUnavailableError } from "../src/core/errors.js";
+import type { KnowledgeSourcePort } from "../src/core/ports.js";
 
 let root: string;
 
@@ -102,5 +105,97 @@ describe("validateVault", () => {
     const r = validateVault(root);
     expect(r.ok).toBe(false);
     expect(r.errors.some((e) => /Invalid YAML/.test(e.message))).toBe(true);
+  });
+});
+
+describe("validateKnowledgeBase", () => {
+  it("validates a normalized fake source and reports canonical counts", () => {
+    const source: KnowledgeSourcePort = {
+      load: () => ({
+        objects: [
+          {
+            id: "ko_alpha",
+            type: "concept",
+            title: "Alpha",
+            lifecycle: "living",
+            created: "2026-01-01",
+            attributes: {},
+          },
+          {
+            id: "ko_beta",
+            type: "concept",
+            title: "Beta",
+            lifecycle: "living",
+            created: "2026-01-02",
+            attributes: {},
+          },
+        ],
+        relations: [{ sourceId: "ko_alpha", kind: "supports", targetId: "ko_beta" }],
+        tasks: [{ id: "task_review", status: "open", createdAt: "2026-01-03" }],
+      }),
+    };
+
+    expect(validateKnowledgeBase(source)).toEqual({
+      ok: true,
+      filesScanned: 2,
+      knowledgeObjects: 2,
+      relationsChecked: 1,
+      taskRefsChecked: 0,
+      taskLogs: 0,
+      issues: [],
+    });
+  });
+
+  it("reports invalid canonical ids, derived fields, relations, and task references", () => {
+    const source: KnowledgeSourcePort = {
+      load: () => ({
+        objects: [
+          {
+            id: "agent_wrong",
+            type: "concept",
+            title: "Invalid",
+            lifecycle: "living",
+            created: "2026-01-01",
+            attributes: { activation_score: 99 },
+          },
+          {
+            id: "agent_wrong",
+            type: "agent",
+            title: "Duplicate",
+            lifecycle: "living",
+            created: "2026-01-02",
+            attributes: {},
+          },
+        ],
+        relations: [
+          { sourceId: "agent_wrong", kind: "supports", targetId: "ko_missing" },
+          { sourceId: "agent_wrong", kind: "produces", targetId: "task_missing" },
+        ],
+        tasks: [],
+      }),
+    };
+
+    const report = validateKnowledgeBase(source);
+
+    expect(report.ok).toBe(false);
+    expect(report.relationsChecked).toBe(2);
+    expect(report.taskRefsChecked).toBe(1);
+    expect(report.issues.map((issue) => issue.code)).toEqual([
+      "DUPLICATE_ID",
+      "ID_PREFIX_MISMATCH",
+      "DERIVED_FIELD_MANUAL",
+      "UNKNOWN_RELATION_TARGET",
+      "UNKNOWN_TASK_REFERENCE",
+    ]);
+  });
+
+  it("propagates typed source failures and wraps unknown source failures", () => {
+    const unavailable = new SourceUnavailableError("Knowledge source is unavailable");
+    const typedFailure: KnowledgeSourcePort = { load: () => { throw unavailable; } };
+    const unknownFailure: KnowledgeSourcePort = { load: () => { throw new Error("offline"); } };
+
+    expect(() => validateKnowledgeBase(typedFailure)).toThrow(unavailable);
+    expect(() => validateKnowledgeBase(unknownFailure)).toThrow(SourceUnavailableError);
+    expect(() => validateKnowledgeBase(unknownFailure)).toThrow("Knowledge source is unavailable");
   });
 });
