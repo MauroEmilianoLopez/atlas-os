@@ -11,6 +11,8 @@ export interface KnowledgeObject {
   readonly lifecycle: "fleeting" | "living" | "archived";
   readonly created: string;
   readonly attributes: Readonly<Record<string, unknown>>;
+  /** Adapter-supplied location used only when rendering validation diagnostics. */
+  readonly sourcePath?: string;
 }
 
 export interface Relation {
@@ -18,18 +20,24 @@ export interface Relation {
   readonly kind: string;
   readonly targetId: string;
   readonly label?: string;
+  /** Adapter-supplied location used only when rendering validation diagnostics. */
+  readonly sourcePath?: string;
 }
 
 export interface TaskRecord {
   readonly id: string;
   readonly status: string | null;
   readonly createdAt: string | null;
+  /** Adapter-supplied location used only when rendering validation diagnostics. */
+  readonly sourcePath?: string;
 }
 
 export interface KnowledgeSnapshot {
   readonly objects: readonly KnowledgeObject[];
   readonly relations: readonly Relation[];
   readonly tasks: readonly TaskRecord[];
+  /** Diagnostics and counts that remain meaningful when source scanning can continue. */
+  readonly validation?: ValidationSourceMetadata;
 }
 
 export interface ValidationIssue {
@@ -37,6 +45,20 @@ export interface ValidationIssue {
   readonly message: string;
   readonly severity: "error" | "warning";
   readonly subject?: string;
+  /** Adapter-supplied location used only when rendering validation diagnostics. */
+  readonly sourcePath?: string;
+}
+
+export interface ValidationSourceMetadata {
+  readonly filesScanned: number;
+  readonly taskLogs: number;
+  readonly diagnostics: readonly ValidationIssue[];
+}
+
+export interface ValidationRenderIssue {
+  readonly level: "error" | "warning";
+  readonly file: string;
+  readonly message: string;
 }
 
 export interface ValidationReport {
@@ -46,6 +68,10 @@ export interface ValidationReport {
   readonly relationsChecked: number;
   readonly taskRefsChecked: number;
   readonly taskLogs: number;
+  /** Render-ready errors for compatibility adapters. */
+  readonly errors: readonly ValidationRenderIssue[];
+  /** Render-ready warnings for compatibility adapters. */
+  readonly warnings: readonly ValidationRenderIssue[];
   readonly issues: readonly ValidationIssue[];
 }
 

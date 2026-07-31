@@ -5,6 +5,7 @@ import type {
   TaskRecord,
   ValidationIssue,
   ValidationReport,
+  ValidationRenderIssue,
 } from "./contracts.js";
 import { SourceUnavailableError } from "./errors.js";
 import type { KnowledgeSourcePort } from "./ports.js";
@@ -23,13 +24,13 @@ const LIFECYCLES = new Set(["fleeting", "living", "archived"]);
 
 export function validateKnowledgeBase(source: KnowledgeSourcePort): ValidationReport {
   const snapshot = loadSnapshot(source);
-  const issues: ValidationIssue[] = [];
+  const issues: ValidationIssue[] = [...(snapshot.validation?.diagnostics ?? [])];
   const objectIds = new Set<string>();
   const taskIds = new Set<string>();
 
   for (const object of snapshot.objects) {
     if (objectIds.has(object.id)) {
-      issues.push(issue("DUPLICATE_ID", `Duplicate knowledge object id: ${object.id}`, object.id));
+      issues.push(issue("DUPLICATE_ID", `Duplicate knowledge object id: ${object.id}`, object.id, object.sourcePath));
     } else {
       objectIds.add(object.id);
     }
@@ -41,7 +42,7 @@ export function validateKnowledgeBase(source: KnowledgeSourcePort): ValidationRe
 
   for (const task of snapshot.tasks) {
     if (taskIds.has(task.id)) {
-      issues.push(issue("DUPLICATE_TASK_ID", `Duplicate task id: ${task.id}`, task.id));
+      issues.push(issue("DUPLICATE_TASK_ID", `Duplicate task id: ${task.id}`, task.id, task.sourcePath));
     } else {
       taskIds.add(task.id);
     }
@@ -60,13 +61,18 @@ export function validateKnowledgeBase(source: KnowledgeSourcePort): ValidationRe
     validateRelation(relation, objectIds, taskIds, issues);
   }
 
+  const errors = issues.filter((entry) => entry.severity === "error").map(renderIssue);
+  const warnings = issues.filter((entry) => entry.severity === "warning").map(renderIssue);
+
   return {
-    ok: issues.length === 0,
-    filesScanned: snapshot.objects.length,
+    ok: errors.length === 0,
+    filesScanned: snapshot.validation?.filesScanned ?? snapshot.objects.length,
     knowledgeObjects: snapshot.objects.length,
     relationsChecked: snapshot.relations.length,
     taskRefsChecked,
-    taskLogs: 0,
+    taskLogs: snapshot.validation?.taskLogs ?? 0,
+    errors,
+    warnings,
     issues,
   };
 }
@@ -85,40 +91,40 @@ function loadSnapshot(source: KnowledgeSourcePort): KnowledgeSnapshot {
 
 function validateObject(object: KnowledgeObject, issues: ValidationIssue[]): void {
   if (!isNonEmptyString(object.id)) {
-    issues.push(issue("INVALID_ID", "Knowledge object id must be a non-empty string"));
+    issues.push(issue("INVALID_ID", "Knowledge object id must be a non-empty string", undefined, object.sourcePath));
   } else if (!object.id.startsWith(prefixFor(object.type))) {
-    issues.push(issue("ID_PREFIX_MISMATCH", `Knowledge object id prefix does not match type: ${object.type}`, object.id));
+    issues.push(issue("ID_PREFIX_MISMATCH", `Knowledge object id prefix does not match type: ${object.type}`, object.id, object.sourcePath));
   }
 
   if (!isNonEmptyString(object.type)) {
-    issues.push(issue("INVALID_OBJECT_TYPE", "Knowledge object type must be a non-empty string", object.id));
+    issues.push(issue("INVALID_OBJECT_TYPE", "Knowledge object type must be a non-empty string", object.id, object.sourcePath));
   }
   if (!isNonEmptyString(object.title)) {
-    issues.push(issue("INVALID_OBJECT_TITLE", "Knowledge object title must be a non-empty string", object.id));
+    issues.push(issue("INVALID_OBJECT_TITLE", "Knowledge object title must be a non-empty string", object.id, object.sourcePath));
   }
   if (!isNonEmptyString(object.created)) {
-    issues.push(issue("INVALID_CREATED_AT", "Knowledge object created value must be a non-empty string", object.id));
+    issues.push(issue("INVALID_CREATED_AT", "Knowledge object created value must be a non-empty string", object.id, object.sourcePath));
   }
   if (!LIFECYCLES.has(object.lifecycle)) {
-    issues.push(issue("INVALID_LIFECYCLE", `Unsupported lifecycle: ${String(object.lifecycle)}`, object.id));
+    issues.push(issue("INVALID_LIFECYCLE", `Unsupported lifecycle: ${String(object.lifecycle)}`, object.id, object.sourcePath));
   }
 
   for (const field of DERIVED_FIELDS) {
     if (Object.prototype.hasOwnProperty.call(object.attributes, field)) {
-      issues.push(issue("DERIVED_FIELD_MANUAL", `Derived field must not be set manually: ${field}`, object.id));
+      issues.push(issue("DERIVED_FIELD_MANUAL", `Derived field must not be set manually: ${field}`, object.id, object.sourcePath));
     }
   }
 }
 
 function validateTask(task: TaskRecord, issues: ValidationIssue[]): void {
   if (!isNonEmptyString(task.id) || !task.id.startsWith("task_")) {
-    issues.push(issue("INVALID_TASK_ID", "Task id must use the task_ prefix", task.id));
+    issues.push(issue("INVALID_TASK_ID", "Task id must use the task_ prefix", task.id, task.sourcePath));
   }
   if (task.status !== null && !isNonEmptyString(task.status)) {
-    issues.push(issue("INVALID_TASK_STATUS", "Task status must be a non-empty string or null", task.id));
+    issues.push(issue("INVALID_TASK_STATUS", "Task status must be a non-empty string or null", task.id, task.sourcePath));
   }
   if (task.createdAt !== null && !isNonEmptyString(task.createdAt)) {
-    issues.push(issue("INVALID_TASK_CREATED_AT", "Task createdAt must be a non-empty string or null", task.id));
+    issues.push(issue("INVALID_TASK_CREATED_AT", "Task createdAt must be a non-empty string or null", task.id, task.sourcePath));
   }
 }
 
@@ -129,17 +135,17 @@ function validateRelation(
   issues: ValidationIssue[],
 ): void {
   if (!isNonEmptyString(relation.sourceId) || !objectIds.has(relation.sourceId)) {
-    issues.push(issue("UNKNOWN_RELATION_SOURCE", `Relation source does not exist: ${relation.sourceId}`, relation.sourceId));
+    issues.push(issue("UNKNOWN_RELATION_SOURCE", `Relation source does not exist: ${relation.sourceId}`, relation.sourceId, relation.sourcePath));
   }
   if (!isNonEmptyString(relation.kind)) {
-    issues.push(issue("INVALID_RELATION_KIND", "Relation kind must be a non-empty string", relation.sourceId));
+    issues.push(issue("INVALID_RELATION_KIND", "Relation kind must be a non-empty string", relation.sourceId, relation.sourcePath));
   }
   if (!isNonEmptyString(relation.targetId)) {
-    issues.push(issue("INVALID_RELATION_TARGET", "Relation target must be a non-empty string", relation.sourceId));
+    issues.push(issue("INVALID_RELATION_TARGET", "Relation target must be a non-empty string", relation.sourceId, relation.sourcePath));
   } else if (relation.targetId.startsWith("task_") && !taskIds.has(relation.targetId)) {
-    issues.push(issue("UNKNOWN_TASK_REFERENCE", `Relation target task does not exist: ${relation.targetId}`, relation.sourceId));
+    issues.push(issue("UNKNOWN_TASK_REFERENCE", `Relation target task does not exist: ${relation.targetId}`, relation.sourceId, relation.sourcePath));
   } else if (!relation.targetId.startsWith("task_") && !objectIds.has(relation.targetId)) {
-    issues.push(issue("UNKNOWN_RELATION_TARGET", `Relation target does not exist: ${relation.targetId}`, relation.sourceId));
+    issues.push(issue("UNKNOWN_RELATION_TARGET", `Relation target does not exist: ${relation.targetId}`, relation.sourceId, relation.sourcePath));
   }
 }
 
@@ -154,8 +160,20 @@ function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.length > 0;
 }
 
-function issue(code: string, message: string, subject?: string): ValidationIssue {
-  return subject === undefined
-    ? { code, message, severity: "error" }
-    : { code, message, severity: "error", subject };
+function issue(code: string, message: string, subject?: string, sourcePath?: string): ValidationIssue {
+  return {
+    code,
+    message,
+    severity: "error",
+    ...(subject === undefined ? {} : { subject }),
+    ...(sourcePath === undefined ? {} : { sourcePath }),
+  };
+}
+
+function renderIssue(issue: ValidationIssue): ValidationRenderIssue {
+  return {
+    level: issue.severity,
+    file: issue.sourcePath ?? issue.subject ?? "<unknown>",
+    message: issue.message,
+  };
 }

@@ -46,6 +46,8 @@ describe("Atlas core public contract", () => {
       relationsChecked: 0,
       taskRefsChecked: 0,
       taskLogs: 0,
+      errors: [{ level: "error", file: "knowledge/invalid.md", message: "id is invalid" }],
+      warnings: [],
       issues: [{ code: "INVALID_ID", message: "id is invalid", severity: "error" }],
     });
 
