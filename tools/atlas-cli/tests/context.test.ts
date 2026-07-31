@@ -1,5 +1,8 @@
 import { describe, it, expect } from "vitest";
 import { buildContext } from "../src/context.js";
+import { assembleContext } from "../src/core/context.js";
+import { InvalidArgumentError, ReferenceNotFoundError } from "../src/core/errors.js";
+import type { AtlasIndex } from "../src/core/contracts.js";
 import type { LoadedIndex } from "../src/index-loader.js";
 import type { Graph } from "../src/graph.js";
 
@@ -105,5 +108,86 @@ describe("Context Engine v0 — activation ranking", () => {
     // budget 2 = seed + 1 neighbor; ranking must keep "high"
     expect(ctx.nodes.map((n) => n.id).sort()).toEqual(["high", "s"]);
     expect(ctx.truncated).toBe(true);
+  });
+});
+
+function makeCoreIndex(): AtlasIndex {
+  const objects = ["seed", "alpha", "beta", "gamma"].map((id) => ({
+    id,
+    type: "concept",
+    title: id,
+    lifecycle: "living" as const,
+    created: "2026-01-01",
+    attributes: {},
+  }));
+
+  return {
+    objects,
+    relations: [
+      { sourceId: "seed", kind: "links", targetId: "beta" },
+      { sourceId: "seed", kind: "links", targetId: "alpha" },
+      { sourceId: "beta", kind: "links", targetId: "gamma" },
+      { sourceId: "alpha", kind: "links", targetId: "gamma" },
+    ],
+    graph: {
+      nodes: Object.fromEntries(objects.map((object) => [object.id, object.id])),
+      edges: { seed: ["beta", "alpha"], alpha: ["gamma"], beta: ["gamma"], gamma: [] },
+      reverseEdges: { seed: [], alpha: ["seed"], beta: ["seed"], gamma: ["beta", "alpha"] },
+    },
+    tasks: [],
+    stats: { objects: 4, relations: 4, tasks: 0, types: { concept: 4 } },
+    generatedAt: "2026-01-01T00:00:00.000Z",
+  };
+}
+
+describe("assembleContext", () => {
+  it("resolves a seed and traverses its graph deterministically", () => {
+    const index = makeCoreIndex();
+
+    const first = assembleContext(index, { seedId: "seed", hops: 2, direction: "out" });
+    const second = assembleContext(index, { seedId: "seed", hops: 2, direction: "out" });
+
+    expect(first).toEqual(second);
+    expect(first).toMatchObject({ ok: true });
+    if (!first.ok) throw first.error;
+    expect(first.value.nodes.map((node) => node.id)).toEqual(["seed", "alpha", "beta", "gamma"]);
+    expect(first.value.relations).toEqual([
+      { sourceId: "alpha", kind: "links", targetId: "gamma" },
+      { sourceId: "beta", kind: "links", targetId: "gamma" },
+      { sourceId: "seed", kind: "links", targetId: "alpha" },
+      { sourceId: "seed", kind: "links", targetId: "beta" },
+    ]);
+  });
+
+  it("traverses incoming references and truncates only after the requested node budget", () => {
+    const index = makeCoreIndex();
+
+    const incoming = assembleContext(index, { seedId: "gamma", hops: 1, direction: "in" });
+    const limited = assembleContext(index, { seedId: "seed", hops: 1, budget: 2, direction: "out" });
+
+    expect(incoming).toMatchObject({ ok: true });
+    if (!incoming.ok) throw incoming.error;
+    expect(incoming.value.nodes.map((node) => node.id)).toEqual(["gamma", "alpha", "beta"]);
+
+    expect(limited).toMatchObject({ ok: true });
+    if (!limited.ok) throw limited.error;
+    expect(limited.value).toMatchObject({ truncated: true });
+    expect(limited.value.nodes.map((node) => node.id)).toEqual(["seed", "alpha"]);
+    expect(limited.value.relations).toEqual([{ sourceId: "seed", kind: "links", targetId: "alpha" }]);
+  });
+
+  it("returns stable typed errors for invalid queries and missing seeds", () => {
+    const index = makeCoreIndex();
+
+    const invalid = assembleContext(index, { seedId: "seed", hops: -1 });
+    const missing = assembleContext(index, { seedId: "ko_missing" });
+
+    expect(invalid).toMatchObject({ ok: false, error: expect.any(InvalidArgumentError) });
+    if (invalid.ok) throw new Error("Expected an invalid argument result");
+    expect(invalid.error).toMatchObject({ code: "INVALID_ARGUMENT", details: { argument: "hops" } });
+
+    expect(missing).toMatchObject({ ok: false, error: expect.any(ReferenceNotFoundError) });
+    if (missing.ok) throw new Error("Expected a missing reference result");
+    expect(missing.error).toMatchObject({ code: "REFERENCE_NOT_FOUND", details: { reference: "ko_missing" } });
   });
 });
