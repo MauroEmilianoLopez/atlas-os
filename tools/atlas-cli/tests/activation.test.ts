@@ -1,5 +1,8 @@
 import { describe, it, expect } from "vitest";
 import { computeActivation, DEFAULT_WEIGHTS } from "../src/activation.js";
+import { scoreActivation } from "../src/core/activation.js";
+import { ExternalCapabilityError, InvalidArgumentError } from "../src/core/errors.js";
+import type { ActivationWeights, AtlasIndex } from "../src/core/contracts.js";
 import type { LoadedIndex } from "../src/index-loader.js";
 import type { Graph, IndexedObject, IndexedRelation } from "../src/graph.js";
 
@@ -80,5 +83,87 @@ describe("Activation v0 (structural)", () => {
   it("is deterministic", () => {
     const build = () => JSON.stringify(computeActivation(idx([obj("ko_a", "concept", { endorsed_by_human: true })], [])).entries);
     expect(build()).toBe(build());
+  });
+});
+
+const coreWeights: ActivationWeights = {
+  humanEndorsement: 40,
+  humanValidation: 15,
+  centrality: 6,
+  centralityCap: 5,
+  hotThreshold: 50,
+  reactivableFloor: 30,
+};
+
+function coreIndex(): AtlasIndex {
+  return {
+    objects: [
+      {
+        id: "ko_hot",
+        type: "decision",
+        title: "Hot",
+        lifecycle: "living",
+        created: "2026-01-01",
+        attributes: { endorsedByHuman: true, validatedByHuman: true },
+      },
+      {
+        id: "ko_reactivable",
+        type: "concept",
+        title: "Reactivable",
+        lifecycle: "living",
+        created: "2026-01-01",
+        attributes: { validatedByHuman: true },
+      },
+      {
+        id: "ko_cold",
+        type: "concept",
+        title: "Cold",
+        lifecycle: "living",
+        created: "2026-01-01",
+        attributes: {},
+      },
+    ],
+    relations: [{ sourceId: "ko_hot", kind: "supports", targetId: "ko_cold" }],
+    graph: {
+      nodes: { ko_hot: "ko_hot", ko_reactivable: "ko_reactivable", ko_cold: "ko_cold" },
+      edges: { ko_hot: ["ko_cold"], ko_reactivable: [], ko_cold: [] },
+      reverseEdges: { ko_hot: [], ko_reactivable: [], ko_cold: ["ko_hot"] },
+    },
+    tasks: [],
+    stats: { objects: 3, relations: 1, tasks: 0, types: { decision: 1, concept: 2 } },
+    generatedAt: "2026-01-01T00:00:00.000Z",
+  };
+}
+
+describe("scoreActivation", () => {
+  it("computes structural scores and bands from canonical index data", () => {
+    const result = scoreActivation(coreIndex(), coreWeights, { now: () => "2026-02-03T04:05:06.000Z" });
+
+    expect(result).toMatchObject({ ok: true });
+    if (!result.ok) throw result.error;
+
+    expect(result.value).toEqual({
+      generatedAt: "2026-02-03T04:05:06.000Z",
+      scores: { ko_hot: 61, ko_reactivable: 30, ko_cold: 6 },
+      bands: { ko_hot: "ACTIVO", ko_reactivable: "REACTIVABLE", ko_cold: "FRIO" },
+    });
+  });
+
+  it("returns a typed invalid-argument result for invalid weights", () => {
+    const result = scoreActivation(coreIndex(), { ...coreWeights, centrality: -1 }, { now: () => "unused" });
+
+    expect(result).toMatchObject({ ok: false, error: expect.any(InvalidArgumentError) });
+    if (result.ok) throw new Error("Expected invalid weights to fail");
+    expect(result.error).toMatchObject({ code: "INVALID_ARGUMENT", details: { argument: "centrality" } });
+  });
+
+  it("returns a typed external-capability result when the ClockPort fails", () => {
+    const clockFailure = new Error("clock adapter failed");
+    const result = scoreActivation(coreIndex(), coreWeights, { now: () => { throw clockFailure; } });
+
+    expect(result).toMatchObject({ ok: false, error: expect.any(ExternalCapabilityError) });
+    if (result.ok) throw new Error("Expected clock failure to be returned");
+    expect(result.error).toMatchObject({ code: "EXTERNAL_CAPABILITY", message: "Clock is unavailable" });
+    expect(result.error.cause).toBe(clockFailure);
   });
 });

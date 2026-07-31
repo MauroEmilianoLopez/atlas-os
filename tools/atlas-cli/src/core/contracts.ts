@@ -94,7 +94,10 @@ export interface ActivationWeights {
   readonly reactivableFloor: number;
 }
 
+export type ActivationBand = "ACTIVO" | "REACTIVABLE" | "FRIO";
+
 export interface ActivationResult {
   readonly generatedAt: string;
   readonly scores: Readonly<Record<string, number>>;
+  readonly bands: Readonly<Record<string, ActivationBand>>;
 }
