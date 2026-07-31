@@ -5,7 +5,7 @@ import path from "node:path";
 import fs from "node:fs";
 import process from "node:process";
 import { Command } from "commander";
-import { validateVault } from "./validate.js";
+import { runValidateCommand } from "./cli-validate.js";
 import { generateId } from "./id.js";
 import { createKO } from "./generator.js";
 import { buildIndex } from "./indexer.js";
@@ -27,37 +27,7 @@ program
   .description("Validate all Knowledge Objects, relations and task references in a vault")
   .action((vault: string) => {
     const root = path.resolve(process.cwd(), vault);
-    const r = validateVault(root);
-
-    if (r.ok) {
-      console.log("Atlas validation passed.");
-    } else {
-      console.log("Atlas validation failed.\n");
-      // group errors by file
-      const byFile = new Map<string, string[]>();
-      for (const e of r.errors) {
-        if (!byFile.has(e.file)) byFile.set(e.file, []);
-        byFile.get(e.file)!.push(e.message);
-      }
-      for (const [file, msgs] of byFile) {
-        console.log(`ERROR ${file}`);
-        for (const m of msgs) console.log(`- ${m}`);
-        console.log("");
-      }
-    }
-
-    for (const w of r.warnings) {
-      console.log(`WARNING ${w.file}\n- ${w.message}\n`);
-    }
-
-    console.log(`Files scanned: ${r.filesScanned}`);
-    console.log(`Knowledge Objects: ${r.knowledgeObjects}`);
-    console.log(`Relations checked: ${r.relationsChecked}`);
-    console.log(`Task references checked: ${r.taskRefsChecked}`);
-    console.log(`Errors: ${r.errors.length}`);
-    console.log(`Warnings: ${r.warnings.length}`);
-
-    process.exit(r.ok ? 0 : 1);
+    process.exit(runValidateCommand(root, console.log));
   });
 
 // --- id ---
