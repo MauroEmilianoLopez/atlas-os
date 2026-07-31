@@ -142,8 +142,93 @@ describe("validateKnowledgeBase", () => {
       relationsChecked: 1,
       taskRefsChecked: 0,
       taskLogs: 0,
+      errors: [],
+      warnings: [],
       issues: [],
     });
+  });
+
+  it("keeps source diagnostics continuable while exposing legacy counts and render-ready groups", () => {
+    const source: KnowledgeSourcePort = {
+      load: () => ({
+        objects: [
+          {
+            id: "ko_alpha",
+            type: "concept",
+            title: "Alpha",
+            lifecycle: "living",
+            created: "2026-01-01",
+            attributes: {},
+          },
+        ],
+        relations: [],
+        tasks: [],
+        validation: {
+          filesScanned: 4,
+          taskLogs: 2,
+          diagnostics: [
+            {
+              code: "INVALID_YAML",
+              message: "Invalid YAML: bad indentation",
+              severity: "error",
+              sourcePath: "knowledge/concepts/broken.md",
+            },
+            {
+              code: "DERIVED_CACHE",
+              message: "derived.cached should be false in P1 (got true)",
+              severity: "warning",
+              sourcePath: "knowledge/concepts/alpha.md",
+            },
+          ],
+        },
+      }),
+    };
+
+    expect(validateKnowledgeBase(source)).toMatchObject({
+      ok: false,
+      filesScanned: 4,
+      knowledgeObjects: 1,
+      relationsChecked: 0,
+      taskRefsChecked: 0,
+      taskLogs: 2,
+      errors: [{ level: "error", file: "knowledge/concepts/broken.md", message: "Invalid YAML: bad indentation" }],
+      warnings: [{ level: "warning", file: "knowledge/concepts/alpha.md", message: "derived.cached should be false in P1 (got true)" }],
+      issues: [
+        expect.objectContaining({ code: "INVALID_YAML", severity: "error", sourcePath: "knowledge/concepts/broken.md" }),
+        expect.objectContaining({ code: "DERIVED_CACHE", severity: "warning", sourcePath: "knowledge/concepts/alpha.md" }),
+      ],
+    });
+  });
+
+  it("renders domain diagnostics against the adapter-provided source location", () => {
+    const source: KnowledgeSourcePort = {
+      load: () => ({
+        objects: [
+          {
+            id: "ko_agent",
+            type: "agent",
+            title: "Agent",
+            lifecycle: "living",
+            created: "2026-01-01",
+            attributes: {},
+            sourcePath: "execution/agents/agent.md",
+          },
+        ],
+        relations: [],
+        tasks: [],
+      }),
+    };
+
+    const report = validateKnowledgeBase(source);
+
+    expect(report.ok).toBe(false);
+    expect(report.errors).toEqual([
+      {
+        level: "error",
+        file: "execution/agents/agent.md",
+        message: "Knowledge object id prefix does not match type: agent",
+      },
+    ]);
   });
 
   it("reports invalid canonical ids, derived fields, relations, and task references", () => {
