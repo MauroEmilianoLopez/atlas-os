@@ -9,8 +9,9 @@ import { runValidateCommand } from "./cli-validate.js";
 import { generateId } from "./id.js";
 import { createKO } from "./generator.js";
 import { buildIndex } from "./indexer.js";
-import { loadIndex, resolveSeed, IndexNotBuiltError } from "./index-loader.js";
-import { buildContext, renderContext, type Direction } from "./context.js";
+import { loadIndex, IndexNotBuiltError } from "./index-loader.js";
+import { resolveSeed, loadCoreIndex, renderContextResult, CoreIndexNotBuiltError } from "./adapters/index-json.js";
+import { assembleContext } from "./core/context.js";
 import { computeActivation, loadWeights, persistActivation, type ActivationEntry } from "./activation.js";
 import { ID_PREFIX } from "./types.js";
 
@@ -19,6 +20,16 @@ program
   .name("atlas")
   .description("Atlas Validator & Generator (P1)")
   .version("0.1.0");
+
+function parseContextHops(raw: string): number {
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) ? Math.ceil(parsed) : -1;
+}
+
+function parseContextBudget(raw: string): number {
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) ? Math.max(0, Math.ceil(parsed)) : 20;
+}
 
 // --- validate ---
 program
@@ -109,9 +120,9 @@ program
     const root = path.resolve(process.cwd(), vault);
     let idx;
     try {
-      idx = loadIndex(root);
+      idx = loadCoreIndex(root);
     } catch (e) {
-      if (e instanceof IndexNotBuiltError) {
+      if (e instanceof CoreIndexNotBuiltError) {
         console.error(e.message);
         process.exit(1);
       }
@@ -124,7 +135,7 @@ program
       process.exit(1);
     }
 
-    const dir = opts.direction as Direction;
+    const dir = opts.direction as "out" | "in" | "both";
     if (!["out", "in", "both"].includes(dir)) {
       console.error(`Invalid --direction "${opts.direction}" (use out | in | both)`);
       process.exit(1);
@@ -147,18 +158,24 @@ program
       }
     }
 
-    const ctx = buildContext(idx, seedId, {
-      hops: Number(opts.hops),
-      budget: Number(opts.budget),
+    const ctx = assembleContext(idx, {
+      seedId,
+      hops: parseContextHops(opts.hops),
+      budget: parseContextBudget(opts.budget),
       direction: dir,
       coreOnly: opts.coreOnly,
-      activation,
+      rank: activation,
     });
 
+    if (!ctx.ok) {
+      console.error(ctx.error.message);
+      process.exit(1);
+    }
+
     if (opts.json) {
-      console.log(JSON.stringify(ctx, null, 2));
+      console.log(JSON.stringify(ctx.value, null, 2));
     } else {
-      console.log(renderContext(idx, ctx));
+      console.log(renderContextResult(idx, ctx.value));
     }
     process.exit(0);
   });

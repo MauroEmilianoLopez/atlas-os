@@ -15,7 +15,7 @@ describe("validate CLI composition", () => {
       "Atlas validation passed.",
       "Files scanned: 17",
       "Knowledge Objects: 13",
-      "Relations checked: 17",
+      "Relations checked: 18",
       "Task references checked: 1",
       "Errors: 0",
       "Warnings: 0",

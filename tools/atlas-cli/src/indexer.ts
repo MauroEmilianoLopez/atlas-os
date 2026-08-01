@@ -13,7 +13,11 @@ import {
   type IndexedRelation,
   type Graph,
 } from "./graph.js";
-import { cleanIndex, writeJson } from "./writer.js";
+import { buildKnowledgeIndex } from "./core/index.js";
+import type { KnowledgeObject, Relation, TaskRecord } from "./core/contracts.js";
+import { toLegacyRelations, writeIndexArtifacts } from "./adapters/index-json.js";
+import { SystemClock } from "./adapters/system-clock.js";
+import { FilesystemKnowledgeSource } from "./adapters/filesystem-source.js";
 import { SCALAR_RELATIONS } from "./types.js";
 import fs from "node:fs";
 import path from "node:path";
@@ -64,6 +68,65 @@ function scalarHasHuman(v: unknown): boolean {
   return false;
 }
 
+function toLegacyObject(object: KnowledgeObject): IndexedObject {
+  const attributes = object.attributes as Record<string, unknown>;
+  return {
+    id: object.id,
+    type: object.type,
+    title: object.title,
+    lifecycle: object.lifecycle,
+    path: object.sourcePath ?? "",
+    created: object.created,
+    tags: asArr(attributes.tags),
+    aliases: asArr(attributes.aliases),
+    endorsed_by_human: scalarHasHuman(attributes.respaldado_por),
+    validated_by_human: scalarHasHuman(attributes.validado_por),
+  };
+}
+
+function pickCoreAttributes(fm: Record<string, unknown>): Readonly<Record<string, unknown>> {
+  const attributes: Record<string, unknown> = { ...fm };
+  delete attributes.id;
+  delete attributes.type;
+  delete attributes.title;
+  delete attributes.lifecycle;
+  delete attributes.created;
+  return attributes;
+}
+
+function toCoreRelation(relation: IndexedRelation): Relation {
+  return {
+    sourceId: relation.source_id,
+    originalSourceId: relation.source_id,
+    kind: relation.relation,
+    targetId: relation.target_id,
+    originalTargetId: relation.target_id,
+    label: relation.target_label,
+    derivesFrom: relation.deriva_de,
+    writtenBy: relation.escrito_por,
+    endorsedBy: relation.respaldado_por,
+    validatedBy: relation.validado_por,
+    traversalKind: relation.kind,
+    sourcePath: relation.source_path,
+  };
+}
+
+function countRelationsByType(relations: readonly IndexedRelation[]): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const relation of relations) {
+    counts[relation.relation] = (counts[relation.relation] ?? 0) + 1;
+  }
+  return counts;
+}
+
+function countTypes(objects: readonly IndexedObject[]): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const object of objects) {
+    counts[object.type] = (counts[object.type] ?? 0) + 1;
+  }
+  return counts;
+}
+
 /** Build (and optionally write) the external index for a vault.
  *  Runs P1 validation first; if it fails, returns ok:false and writes nothing. */
 export function buildIndex(
@@ -90,6 +153,8 @@ export function buildIndex(
   const files = findMarkdown(vaultRoot);
   const objects: IndexedObject[] = [];
   const relations: IndexedRelation[] = [];
+  const coreObjects: KnowledgeObject[] = [];
+  const coreRelations: Relation[] = [];
   const idToPath: Record<string, string> = {};
   const pathToId: Record<string, string> = {};
   const typeCounts: Record<string, number> = {};
@@ -123,6 +188,17 @@ export function buildIndex(
           validated_by_human: scalarHasHuman(fm.validado_por),
         };
         objects.push(obj);
+        coreObjects.push({
+          id: ko.id,
+          type: ko.type,
+          title: ko.title,
+          lifecycle: ko.lifecycle,
+          created: asStr(ko.created),
+          attributes: {
+            ...pickCoreAttributes(fm),
+          },
+          sourcePath: p.relPath,
+        });
         idToPath[ko.id] = p.relPath;
         pathToId[p.relPath] = ko.id;
         typeCounts[ko.type] = (typeCounts[ko.type] ?? 0) + 1;
@@ -150,6 +226,7 @@ export function buildIndex(
         validado_por: typeof raw.validado_por === "string" ? raw.validado_por : undefined,
       };
       relations.push(rel);
+      coreRelations.push(toCoreRelation(rel));
       relCounts[r.key] = (relCounts[r.key] ?? 0) + 1;
     }
 
@@ -161,14 +238,16 @@ export function buildIndex(
       const vals = Array.isArray(val) ? val : [val];
       for (const v of vals) {
         if (typeof v !== "string" || v === "human") continue;
-        relations.push({
+        const rel: IndexedRelation = {
           source_id: sourceId,
           source_path: sourcePath,
           relation: key,
           target_id: v,
           strength: "strong",
           kind: relationKind(key),
-        });
+        };
+        relations.push(rel);
+        coreRelations.push(toCoreRelation(rel));
         relCounts[key] = (relCounts[key] ?? 0) + 1;
       }
     }
@@ -176,37 +255,60 @@ export function buildIndex(
 
   // 3. Tasks index — from the task logs.
   const tasks = indexTasks(vaultRoot, parsedFiles);
+  const coreTasks: TaskRecord[] = tasks.map((task) => ({
+    id: task.id,
+    status: task.status,
+    createdAt: task.date,
+    sourcePath: task.source_log,
+  }));
 
-  // 4. Graph.
-  const graph = buildGraph(objects, relations);
+  const snapshot = new FilesystemKnowledgeSource(vaultRoot).load();
+  const coreResult = buildKnowledgeIndex({ load: () => snapshot }, new SystemClock());
+  if (!coreResult.ok) {
+    return {
+      ok: false,
+      reason: coreResult.error.message,
+      objects: [],
+      relations: [],
+      graph: { nodes: {}, edges: {}, reverse_edges: {} },
+      tasks: [],
+      stats: emptyStats(vaultRoot),
+    };
+  }
 
-  // 5. Stats.
+  const legacyObjects = snapshot.objects.map(toLegacyObject);
+  const legacyRelations = toLegacyRelations(coreResult.value.relationRecords ?? coreResult.value.relations);
+  const graph = buildGraph(legacyObjects, legacyRelations);
   const stats: IndexStats = {
-    generated_at: new Date().toISOString(),
+    generated_at: coreResult.value.generatedAt,
     vault_path: path.basename(vaultRoot),
-    files_scanned: files.length,
-    knowledge_objects: objects.length,
-    relations: relations.length,
+    files_scanned: snapshot.validation?.filesScanned ?? files.length,
+    knowledge_objects: legacyObjects.length,
+    relations: legacyRelations.length,
     tasks: tasks.length,
-    types: typeCounts,
-    relations_by_type: relCounts,
+    types: countTypes(legacyObjects),
+    relations_by_type: countRelationsByType(legacyRelations),
     warnings: validation.warnings.map((w) => `${w.file}: ${w.message}`),
     errors: [],
   };
 
   // 6. Write.
   if (write) {
-    if (opts.clean) cleanIndex(vaultRoot);
-    writeJson(vaultRoot, "objects.json", objects);
-    writeJson(vaultRoot, "id-path.json", idToPath);
-    writeJson(vaultRoot, "path-id.json", pathToId);
-    writeJson(vaultRoot, "relations.json", relations);
-    writeJson(vaultRoot, "graph.json", graph);
-    writeJson(vaultRoot, "tasks.json", tasks);
-    writeJson(vaultRoot, "stats.json", stats);
+    writeIndexArtifacts(vaultRoot, coreResult.value, {
+      clean: opts.clean,
+      tasks,
+      stats,
+    });
   }
 
-  return { ok: true, objects, relations, graph, tasks, stats };
+  return {
+    ok: true,
+    objects: legacyObjects,
+    relations: legacyRelations,
+    graph,
+    tasks,
+    stats,
+  };
 }
 
 /** Parse task log YAML blocks into a flat task index. Tasks are entries, not files (RFC-002 §8). */

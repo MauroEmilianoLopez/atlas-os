@@ -18,7 +18,7 @@ describe("FilesystemKnowledgeSource", () => {
     const snapshot = new FilesystemKnowledgeSource(fixtureVault).load();
 
     expect(snapshot.objects).toHaveLength(13);
-    expect(snapshot.relations).toHaveLength(17);
+    expect(snapshot.relations).toHaveLength(18);
     expect(snapshot.tasks).toHaveLength(1);
     expect(snapshot.validation).toEqual({ filesScanned: 17, taskLogs: 1, diagnostics: [] });
   });

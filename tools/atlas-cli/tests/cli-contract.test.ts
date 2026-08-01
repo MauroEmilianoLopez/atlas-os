@@ -76,6 +76,72 @@ describe("Atlas CLI compatibility contract", () => {
     expect(result.stdout).toContain("Nodes (10):");
   });
 
+  it("routes context JSON output through the Core contract instead of the legacy shape", () => {
+    expect(runCli("index", vault).status).toBe(0);
+
+    const result = runCli("context", "context-engine", vault, "--json");
+    const payload = JSON.parse(result.stdout) as Record<string, unknown>;
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(payload).toMatchObject({
+      seedId: "ko_01JZ000000000000000010",
+      hops: 2,
+      budget: 20,
+      direction: "both",
+      coreOnly: false,
+      ranked: false,
+      truncated: false,
+    });
+    expect(Array.isArray(payload.nodes)).toBe(true);
+    expect(Array.isArray(payload.relations)).toBe(true);
+    expect(payload).not.toHaveProperty("seed_id");
+    expect(payload).not.toHaveProperty("edges");
+  });
+
+  it("treats a non-numeric hops value as seed-only without failing", () => {
+    expect(runCli("index", vault).status).toBe(0);
+
+    const result = runCli("context", "context-engine", vault, "--hops", "nope");
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("Context for: Context Engine");
+    expect(result.stdout).toContain("Nodes (1):");
+    expect(result.stdout).toContain("Edges (0):");
+  });
+
+  it("keeps numeric zero and negative hops seed-only", () => {
+    expect(runCli("index", vault).status).toBe(0);
+
+    const negative = runCli("context", "context-engine", vault, "--hops", "-1");
+    const zero = runCli("context", "context-engine", vault, "--hops", "0");
+
+    expect(negative.status).toBe(0);
+    expect(negative.stderr).toBe("");
+    expect(negative.stdout).toContain("Nodes (1):");
+    expect(negative.stdout).toContain("Edges (0):");
+
+    expect(zero.status).toBe(0);
+    expect(zero.stderr).toBe("");
+    expect(zero.stdout).toContain("Nodes (1):");
+    expect(zero.stdout).toContain("Edges (0):");
+  });
+
+  it("keeps decimal hops accepted by the current CLI boundary", () => {
+    expect(runCli("index", vault).status).toBe(0);
+
+    const result = runCli("context", "context-engine", vault, "--hops", "1.5");
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("Context for: Context Engine");
+    expect(result.stdout).toContain("Nodes (10):");
+    expect(result.stdout).toContain("Edges (22):");
+    expect(result.stdout).toMatch(/^\s+\[d2\]\s+/m);
+    expect(result.stdout).toContain("[d2] event: RFC-002 aprobado");
+  });
+
   it("keeps activation successful and writes a cache with every scored object", () => {
     expect(runCli("index", vault).status).toBe(0);
 

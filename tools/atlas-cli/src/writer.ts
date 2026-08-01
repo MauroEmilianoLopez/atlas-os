@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 export const INDEX_FILES = [
+  "index.json",
   "objects.json",
   "id-path.json",
   "path-id.json",

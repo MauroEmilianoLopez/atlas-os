@@ -7,11 +7,13 @@ import type {
   ValidationIssue,
 } from "../core/contracts.js";
 import type { KnowledgeSourcePort } from "../core/ports.js";
+import { relationKind } from "../graph.js";
 import { parseFile, findMarkdown } from "../parser.js";
 import { extractRelations } from "../relations.js";
 import { commonFrontmatter, NON_KO_TYPES } from "../schemas.js";
 import { collectTaskIds, countTaskLogs } from "../task-log.js";
 import { validateVault } from "../validate.js";
+import { SCALAR_RELATIONS } from "../types.js";
 
 /**
  * Compatibility source for the existing vault layout. It owns filesystem and
@@ -77,8 +79,41 @@ function toRelations(
 
   return extractRelations(parsed.frontmatter).relations.flatMap((relation) => {
     if (relation.target_id === undefined) return [];
-    return [{ sourceId: normalizedSourceId, kind: relation.key, targetId: relation.target_id, sourcePath: parsed.relPath }];
-  });
+    const raw = (relation.raw ?? {}) as Record<string, unknown>;
+    return [{
+      sourceId: normalizedSourceId,
+      originalSourceId: sourceId,
+      kind: relation.key,
+      targetId: relation.target_id,
+      originalTargetId: relation.target_id,
+      label: typeof raw.label === "string" ? raw.label : undefined,
+      derivesFrom: Array.isArray(raw.deriva_de) ? raw.deriva_de.map((value) => String(value)) : undefined,
+      writtenBy: typeof raw.escrito_por === "string" ? raw.escrito_por : undefined,
+      endorsedBy: typeof raw.respaldado_por === "string" ? raw.respaldado_por : undefined,
+      validatedBy: typeof raw.validado_por === "string" ? raw.validado_por : undefined,
+      traversalKind: relationKind(relation.key),
+      sourcePath: parsed.relPath,
+    }];
+  }).concat(
+    [...SCALAR_RELATIONS].flatMap((key) => {
+      const value = parsed.frontmatter[key];
+      if (typeof value !== "string" || value === "human") return [];
+      return [{
+        sourceId: normalizedSourceId,
+        originalSourceId: sourceId,
+        kind: key,
+        targetId: value,
+        originalTargetId: value,
+        label: undefined,
+        derivesFrom: undefined,
+        writtenBy: undefined,
+        endorsedBy: undefined,
+        validatedBy: undefined,
+        traversalKind: relationKind(key),
+        sourcePath: parsed.relPath,
+      }];
+    }),
+  );
 }
 
 function emptySnapshot(filesScanned: number, taskLogs: number, diagnostics: readonly ValidationIssue[]): KnowledgeSnapshot {
