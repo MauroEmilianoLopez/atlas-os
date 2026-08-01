@@ -178,10 +178,47 @@ describe("assembleContext", () => {
     ]);
   });
 
+  it("keeps only the seed when hops are negative", () => {
+    const result = assembleContext(makeCoreIndex(), { seedId: "seed", hops: -1, direction: "out" });
+
+    expect(result).toMatchObject({ ok: true });
+    if (!result.ok) throw result.error;
+    expect(result.value.nodes.map((node) => node.id)).toEqual(["seed"]);
+    expect(result.value.relations).toEqual([]);
+  });
+
+  it("keeps only the seed when hops are zero", () => {
+    const result = assembleContext(makeCoreIndex(), { seedId: "seed", hops: 0, direction: "out" });
+
+    expect(result).toMatchObject({ ok: true });
+    if (!result.ok) throw result.error;
+    expect(result.value.nodes.map((node) => node.id)).toEqual(["seed"]);
+    expect(result.value.relations).toEqual([]);
+  });
+
+  it("keeps only the seed when the budget is zero", () => {
+    const result = assembleContext(makeCoreIndex(), { seedId: "seed", hops: 1, budget: 0, direction: "out" });
+
+    expect(result).toMatchObject({ ok: true });
+    if (!result.ok) throw result.error;
+    expect(result.value.nodes.map((node) => node.id)).toEqual(["seed"]);
+    expect(result.value.relations).toEqual([]);
+  });
+
+  it("combines negative hops and zero budget without expansion", () => {
+    const result = assembleContext(makeCoreIndex(), { seedId: "seed", hops: -1, budget: 0, direction: "out" });
+
+    expect(result).toMatchObject({ ok: true });
+    if (!result.ok) throw result.error;
+    expect(result.value.nodes).toHaveLength(1);
+    expect(result.value.nodes[0]).toMatchObject({ id: "seed", depth: 0 });
+    expect(result.value.relations).toEqual([]);
+  });
+
   it("returns stable typed errors for invalid queries and missing seeds", () => {
     const index = makeCoreIndex();
 
-    const invalid = assembleContext(index, { seedId: "seed", hops: -1 });
+    const invalid = assembleContext(index, { seedId: "seed", hops: 1.5 });
     const missing = assembleContext(index, { seedId: "ko_missing" });
 
     expect(invalid).toMatchObject({ ok: false, error: expect.any(InvalidArgumentError) });

@@ -39,6 +39,24 @@ export function assembleContext(index: AtlasIndex, query: ContextQuery): CoreRes
 
   const visited = new Map<string, ContextNode>();
   visited.set(seedId, toContextNode(objectsById.get(seedId)!, 0, rank));
+
+  if (hops <= 0 || budget <= 0) {
+    return {
+      ok: true,
+      value: {
+        seedId,
+        hops,
+        budget,
+        direction,
+        coreOnly,
+        ranked: rank !== undefined,
+        nodes: [...visited.values()],
+        relations: [],
+        truncated: false,
+      },
+    };
+  }
+
   const frontier = [{ id: seedId, depth: 0 }];
   const traversed = new Map<string, ContextRelation>();
   let truncated = false;
@@ -87,13 +105,13 @@ function normalizeQuery(query: ContextQuery): CoreResult<NormalizedContextQuery>
   }
 
   const hops = query.hops ?? DEFAULT_HOPS;
-  if (!Number.isInteger(hops) || hops < 0) {
-    return { ok: false, error: new InvalidArgumentError("hops", "hops must be a non-negative integer") };
+  if (!Number.isInteger(hops)) {
+    return { ok: false, error: new InvalidArgumentError("hops", "hops must be an integer") };
   }
 
   const budget = query.budget ?? DEFAULT_BUDGET;
-  if (!Number.isInteger(budget) || budget < 1) {
-    return { ok: false, error: new InvalidArgumentError("budget", "budget must be a positive integer") };
+  if (!Number.isInteger(budget) || budget < 0) {
+    return { ok: false, error: new InvalidArgumentError("budget", "budget must be a non-negative integer") };
   }
 
   const direction = query.direction ?? "both";
