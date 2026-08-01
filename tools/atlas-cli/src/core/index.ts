@@ -4,6 +4,9 @@ import type {
   AtlasIndexStats,
   CoreResult,
   KnowledgeSnapshot,
+  Relation,
+  RelationRecord,
+  RelationTraversalKind,
 } from "./contracts.js";
 import { AtlasCoreError, ExternalCapabilityError, SourceUnavailableError, ValidationFailedError } from "./errors.js";
 import type { ClockPort, KnowledgeSourcePort } from "./ports.js";
@@ -27,12 +30,44 @@ export function buildKnowledgeIndex(source: KnowledgeSourcePort, clock: ClockPor
     value: {
       objects: snapshot.objects,
       relations: snapshot.relations,
+      relationRecords: buildRelationRecords(snapshot.relations),
       graph: buildGraph(snapshot),
       tasks: snapshot.tasks,
       stats: buildStats(snapshot),
       generatedAt: generatedAtResult.value,
     },
   };
+}
+
+const CORE_RELATION_TYPES = new Set([
+  "deriva_de",
+  "se_apoya_en",
+  "contradice",
+  "trata_sobre",
+  "decide_sobre",
+  "avanza",
+  "escrito_por",
+  "respaldado_por",
+]);
+
+function buildRelationRecords(relations: readonly Relation[]): readonly RelationRecord[] {
+  return relations.map((relation) => ({
+    sourceId: relation.originalSourceId ?? relation.sourceId,
+    ...(relation.sourcePath === undefined ? {} : { sourcePath: relation.sourcePath }),
+    relation: relation.kind,
+    targetId: relation.originalTargetId ?? relation.targetId,
+    ...(relation.label === undefined ? {} : { targetLabel: relation.label }),
+    strength: "strong",
+    kind: relation.traversalKind ?? relationTraversalKind(relation.kind),
+    ...(relation.derivesFrom === undefined ? {} : { derivesFrom: relation.derivesFrom }),
+    ...(relation.writtenBy === undefined ? {} : { writtenBy: relation.writtenBy }),
+    ...(relation.endorsedBy === undefined ? {} : { endorsedBy: relation.endorsedBy }),
+    ...(relation.validatedBy === undefined ? {} : { validatedBy: relation.validatedBy }),
+  }));
+}
+
+function relationTraversalKind(relation: string): RelationTraversalKind {
+  return CORE_RELATION_TYPES.has(relation) ? "core" : "extended";
 }
 
 function loadSnapshot(source: KnowledgeSourcePort): CoreResult<KnowledgeSnapshot> {

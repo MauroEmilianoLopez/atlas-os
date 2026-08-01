@@ -17,9 +17,18 @@ export interface KnowledgeObject {
 
 export interface Relation {
   readonly sourceId: string;
+  /** Original source retained when traversal uses a canonical Knowledge Object source. */
+  readonly originalSourceId?: string;
   readonly kind: string;
   readonly targetId: string;
+  /** Original target retained when traversal uses a normalized target identifier. */
+  readonly originalTargetId?: string;
   readonly label?: string;
+  /** Legacy relation metadata retained for a later compatibility serializer. */
+  readonly derivesFrom?: readonly string[];
+  readonly writtenBy?: string;
+  readonly endorsedBy?: string;
+  readonly validatedBy?: string;
   /** Classification retained for deterministic context traversal. */
   readonly traversalKind?: RelationTraversalKind;
   /** Adapter-supplied location used only when rendering validation diagnostics. */
@@ -27,6 +36,21 @@ export interface Relation {
 }
 
 export type RelationTraversalKind = "core" | "extended";
+
+/** Structured compatibility record from which an adapter can render legacy relations.json. */
+export interface RelationRecord {
+  readonly sourceId: string;
+  readonly sourcePath?: string;
+  readonly relation: string;
+  readonly targetId: string;
+  readonly targetLabel?: string;
+  readonly strength: "strong";
+  readonly kind: RelationTraversalKind;
+  readonly derivesFrom?: readonly string[];
+  readonly writtenBy?: string;
+  readonly endorsedBy?: string;
+  readonly validatedBy?: string;
+}
 
 export interface TaskRecord {
   readonly id: string;
@@ -82,6 +106,8 @@ export interface ValidationReport {
 export interface AtlasIndex {
   readonly objects: readonly KnowledgeObject[];
   readonly relations: readonly Relation[];
+  /** Lossless structured records for compatibility adapters; Core does not render JSON. */
+  readonly relationRecords?: readonly RelationRecord[];
   readonly graph: AtlasGraph;
   readonly tasks: readonly TaskRecord[];
   readonly stats: AtlasIndexStats;
