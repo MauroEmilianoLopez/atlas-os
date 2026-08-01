@@ -28,6 +28,11 @@ describe("Atlas core public contract", () => {
     expect(contracts).toContain("export interface AtlasIndex");
     expect(contracts).toContain("export interface ContextQuery");
     expect(contracts).toContain("export interface ContextResult");
+    expect(contracts).toContain("readonly coreOnly?: boolean");
+    expect(contracts).toContain("readonly rank?: Readonly<Record<string, number>>");
+    expect(contracts).toContain("readonly traversalKind?: RelationTraversalKind");
+    expect(contracts).toContain("export interface ContextNode");
+    expect(contracts).toContain("export interface ContextRelation");
     expect(contracts).toContain("export interface ActivationWeights");
     expect(contracts).toContain("export interface ActivationResult");
     expect(ports).toContain("export interface KnowledgeSourcePort");

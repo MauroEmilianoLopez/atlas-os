@@ -20,9 +20,13 @@ export interface Relation {
   readonly kind: string;
   readonly targetId: string;
   readonly label?: string;
+  /** Classification retained for deterministic context traversal. */
+  readonly traversalKind?: RelationTraversalKind;
   /** Adapter-supplied location used only when rendering validation diagnostics. */
   readonly sourcePath?: string;
 }
+
+export type RelationTraversalKind = "core" | "extended";
 
 export interface TaskRecord {
   readonly id: string;
@@ -102,12 +106,38 @@ export interface ContextQuery {
   readonly hops?: number;
   readonly budget?: number;
   readonly direction?: "out" | "in" | "both";
+  readonly coreOnly?: boolean;
+  /** Optional activation scores keyed by object id, used to order neighbors under budget. */
+  readonly rank?: Readonly<Record<string, number>>;
+}
+
+export interface ContextNode {
+  readonly id: string;
+  readonly type: string;
+  readonly title: string;
+  readonly sourcePath?: string;
+  readonly depth: number;
+  readonly rank: number;
+}
+
+export interface ContextRelation {
+  readonly sourceId: string;
+  readonly targetId: string;
+  readonly kind: string;
+  readonly traversalKind: RelationTraversalKind;
+  readonly direction: "out" | "in";
+  readonly label?: string;
 }
 
 export interface ContextResult {
   readonly seedId: string;
-  readonly nodes: readonly KnowledgeObject[];
-  readonly relations: readonly Relation[];
+  readonly hops: number;
+  readonly budget: number;
+  readonly direction: "out" | "in" | "both";
+  readonly coreOnly: boolean;
+  readonly ranked: boolean;
+  readonly nodes: readonly ContextNode[];
+  readonly relations: readonly ContextRelation[];
   readonly truncated: boolean;
 }
 

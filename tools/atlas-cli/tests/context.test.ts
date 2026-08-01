@@ -124,10 +124,10 @@ function makeCoreIndex(): AtlasIndex {
   return {
     objects,
     relations: [
-      { sourceId: "seed", kind: "links", targetId: "beta" },
-      { sourceId: "seed", kind: "links", targetId: "alpha" },
-      { sourceId: "beta", kind: "links", targetId: "gamma" },
-      { sourceId: "alpha", kind: "links", targetId: "gamma" },
+      { sourceId: "seed", kind: "links", targetId: "beta", traversalKind: "core" },
+      { sourceId: "seed", kind: "links", targetId: "alpha", traversalKind: "extended" },
+      { sourceId: "beta", kind: "links", targetId: "gamma", traversalKind: "core" },
+      { sourceId: "alpha", kind: "links", targetId: "gamma", traversalKind: "core" },
     ],
     graph: {
       nodes: Object.fromEntries(objects.map((object) => [object.id, object.id])),
@@ -152,10 +152,10 @@ describe("assembleContext", () => {
     if (!first.ok) throw first.error;
     expect(first.value.nodes.map((node) => node.id)).toEqual(["seed", "alpha", "beta", "gamma"]);
     expect(first.value.relations).toEqual([
-      { sourceId: "alpha", kind: "links", targetId: "gamma" },
-      { sourceId: "beta", kind: "links", targetId: "gamma" },
-      { sourceId: "seed", kind: "links", targetId: "alpha" },
-      { sourceId: "seed", kind: "links", targetId: "beta" },
+      { sourceId: "alpha", kind: "links", targetId: "gamma", traversalKind: "core", direction: "out" },
+      { sourceId: "beta", kind: "links", targetId: "gamma", traversalKind: "core", direction: "out" },
+      { sourceId: "seed", kind: "links", targetId: "alpha", traversalKind: "extended", direction: "out" },
+      { sourceId: "seed", kind: "links", targetId: "beta", traversalKind: "core", direction: "out" },
     ]);
   });
 
@@ -172,8 +172,10 @@ describe("assembleContext", () => {
     expect(limited).toMatchObject({ ok: true });
     if (!limited.ok) throw limited.error;
     expect(limited.value).toMatchObject({ truncated: true });
-    expect(limited.value.nodes.map((node) => node.id)).toEqual(["seed", "alpha"]);
-    expect(limited.value.relations).toEqual([{ sourceId: "seed", kind: "links", targetId: "alpha" }]);
+    expect(limited.value.nodes.map((node) => node.id)).toEqual(["seed", "beta"]);
+    expect(limited.value.relations).toEqual([
+      { sourceId: "seed", kind: "links", targetId: "beta", traversalKind: "core", direction: "out" },
+    ]);
   });
 
   it("returns stable typed errors for invalid queries and missing seeds", () => {
@@ -189,5 +191,43 @@ describe("assembleContext", () => {
     expect(missing).toMatchObject({ ok: false, error: expect.any(ReferenceNotFoundError) });
     if (missing.ok) throw new Error("Expected a missing reference result");
     expect(missing.error).toMatchObject({ code: "REFERENCE_NOT_FOUND", details: { reference: "ko_missing" } });
+  });
+
+  it("returns ranked, render-ready traversal data while filtering extended relations", () => {
+    const index = makeCoreIndex();
+
+    const result = assembleContext(index, {
+      seedId: "seed",
+      hops: 1,
+      budget: 2,
+      direction: "out",
+      coreOnly: true,
+      rank: { alpha: 1, beta: 10 },
+    });
+
+    expect(result).toMatchObject({ ok: true });
+    if (!result.ok) throw result.error;
+    expect(result.value).toMatchObject({
+      seedId: "seed",
+      hops: 1,
+      budget: 2,
+      direction: "out",
+      coreOnly: true,
+      ranked: true,
+      truncated: false,
+    });
+    expect(result.value.nodes).toEqual([
+      { id: "seed", type: "concept", title: "seed", sourcePath: undefined, depth: 0, rank: 0 },
+      { id: "beta", type: "concept", title: "beta", sourcePath: undefined, depth: 1, rank: 10 },
+    ]);
+    expect(result.value.relations).toEqual([
+      {
+        sourceId: "seed",
+        targetId: "beta",
+        kind: "links",
+        traversalKind: "core",
+        direction: "out",
+      },
+    ]);
   });
 });

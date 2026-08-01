@@ -80,4 +80,30 @@ describe("buildKnowledgeIndex", () => {
 
     expect(result).toEqual({ ok: false, error: unavailable });
   });
+
+  it("preserves relation traversal kinds for later core-only context assembly", () => {
+    const source: KnowledgeSourcePort = {
+      load: () => ({
+        objects: [
+          { id: "ko_alpha", type: "concept", title: "Alpha", lifecycle: "living", created: "2026-01-01", attributes: {} },
+          { id: "ko_beta", type: "concept", title: "Beta", lifecycle: "living", created: "2026-01-02", attributes: {} },
+          { id: "ko_gamma", type: "concept", title: "Gamma", lifecycle: "living", created: "2026-01-03", attributes: {} },
+        ],
+        relations: [
+          { sourceId: "ko_alpha", kind: "supports", targetId: "ko_beta", traversalKind: "core" },
+          { sourceId: "ko_alpha", kind: "mentions", targetId: "ko_gamma", traversalKind: "extended" },
+        ],
+        tasks: [],
+      }),
+    };
+
+    const result = buildKnowledgeIndex(source, clock);
+
+    expect(result).toMatchObject({ ok: true });
+    if (!result.ok) throw result.error;
+    expect(result.value.relations).toEqual([
+      { sourceId: "ko_alpha", kind: "supports", targetId: "ko_beta", traversalKind: "core" },
+      { sourceId: "ko_alpha", kind: "mentions", targetId: "ko_gamma", traversalKind: "extended" },
+    ]);
+  });
 });
