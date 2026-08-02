@@ -1,41 +1,63 @@
-// activation.ts — Activation Model v0: STRUCTURAL component only (RFC-001.2).
-//
-// Activation = volatile (decays with time) + structural (does not decay by clock).
-// P4 computes ONLY the structural component, because the volatile one needs real usage signals
-// (recent access, task usage, edits) that don't exist yet — there is no Task runtime recording
-// them. Inventing recency would be false precision. So v0 is honest: structural only.
-//
-// Structural signals, all readable from the P2 index today (RFC-001.2 §3.2):
-//   - human endorsement (respaldado_por: human)   -> the strongest, most durable signal
-//   - human validation  (validado_por: human)
-//   - strong-relation centrality (capped, anti-popularity)
-//   - link to an active Intent / active Initiative (via graph reachability)
-//   - unresolved contradictions (contradice)       -> tension bonus (anti confirmation bias)
-//   - importance floor: nothing structurally important is ever buried
-//
-// NOT in v0: volatile component, time decay, auto-compression/archiving (RFC-001.2 recommends an
-// "observation-only" period first). Weights live as DATA (recalibrable) per RFC-001.2 §5.3.
-
-import type { LoadedIndex } from "./index-loader.js";
-import type { IndexedObject, IndexedRelation } from "./graph.js";
+import fs from "node:fs";
+import path from "node:path";
+import type { ActivationResult as CoreActivationResult, ActivationWeights as CoreActivationWeights, AtlasIndex, CoreResult, Relation } from "./core/contracts.js";
+import { scoreActivation } from "./core/activation.js";
+import { loadCoreIndex } from "./adapters/index-json.js";
+import { SystemClock } from "./adapters/system-clock.js";
 import { writeCache } from "./writer.js";
+import type { ClockPort } from "./core/ports.js";
 
-export interface ActivationWeights {
-  human_endorsement: number;   // respaldado_por: human
-  human_validation: number;    // validado_por: human
-  centrality: number;          // per strong relation, up to centrality_cap
-  centrality_cap: number;      // max number of relations that count (anti-popularity)
-  active_intent_link: number;  // reachable to/from an active Intent
-  active_initiative_link: number;
-  tension_bonus: number;       // has an unresolved `contradice`
-  // Bands (thresholds on the normalized 0..100 score).
-  hot_threshold: number;       // >= => ACTIVO
-  reactivable_floor: number;   // importance floor: structurally important never below this
+export type ActivationWeights = CoreActivationWeights;
+
+export const DEFAULT_WEIGHTS: ActivationWeights = {
+  humanEndorsement: 40,
+  humanValidation: 15,
+  centrality: 6,
+  centralityCap: 5,
+  hotThreshold: 50,
+  reactivableFloor: 30,
+};
+
+export interface ActivationEntry {
+  id: string;
+  type: string;
+  title: string;
+  structural_score: number;
+  band: "ACTIVO" | "REACTIVABLE" | "FRIO";
+  signals: {
+    human_endorsement: boolean;
+    human_validation: boolean;
+    strong_relations: number;
+    active_intent_link: boolean;
+    active_initiative_link: boolean;
+    unresolved_contradiction: boolean;
+  };
 }
 
-// Sane starting defaults. Human endorsement dominates (RFC-001.2 §5.3). These are DATA:
-// overridable via .atlas/activation-weights.json without touching code.
-export const DEFAULT_WEIGHTS: ActivationWeights = {
+export interface ActivationCache {
+  generated_at: string;
+  component: "structural";
+  weights: LegacyActivationWeights;
+  entries: Record<string, ActivationEntry>;
+  bands: { ACTIVO: number; REACTIVABLE: number; FRIO: number };
+  note: string;
+}
+
+type ActivationWeightOverride = { -readonly [K in keyof ActivationWeights]?: ActivationWeights[K] };
+
+interface LegacyActivationWeights {
+  human_endorsement: number;
+  human_validation: number;
+  centrality: number;
+  centrality_cap: number;
+  active_intent_link: number;
+  active_initiative_link: number;
+  tension_bonus: number;
+  hot_threshold: number;
+  reactivable_floor: number;
+}
+
+const DEFAULT_LEGACY_WEIGHTS: LegacyActivationWeights = {
   human_endorsement: 40,
   human_validation: 15,
   centrality: 6,
@@ -47,173 +69,224 @@ export const DEFAULT_WEIGHTS: ActivationWeights = {
   reactivable_floor: 30,
 };
 
-export type Band = "ACTIVO" | "REACTIVABLE" | "FRIO";
+const DEFAULT_LEGACY_NOTE =
+  "Structural component only (v0). Volatile component (time decay, recent usage) not yet computed; requires Task runtime usage signals. No auto-compression is driven by this score (observation-only period, RFC-001.2).";
 
-export interface ActivationEntry {
-  id: string;
-  type: string;
-  title: string;
-  structural_score: number;   // 0..100 (volatile omitted in v0)
-  band: Band;
-  signals: {
-    human_endorsement: boolean;
-    human_validation: boolean;
-    strong_relations: number;
-    active_intent_link: boolean;
-    active_initiative_link: boolean;
-    unresolved_contradiction: boolean;
-  };
-}
+export function loadWeights(vaultRoot: string): ActivationWeights {
+  const p = path.join(vaultRoot, ".atlas", "activation-weights.json");
+  if (!fs.existsSync(p)) return DEFAULT_WEIGHTS;
 
-export interface ActivationResult {
-  generated_at: string;
-  component: "structural";     // explicit: v0 has no volatile
-  weights: ActivationWeights;
-  entries: Record<string, ActivationEntry>;  // by id
-  bands: { ACTIVO: number; REACTIVABLE: number; FRIO: number };
-  note: string;
-}
-
-function isHuman(v: unknown): boolean {
-  return v === "human";
-}
-
-/** Collect ids of KOs that are "active": Intents/Initiatives whose lifecycle is living. */
-function activeAnchors(objects: IndexedObject[]): { intents: Set<string>; initiatives: Set<string> } {
-  const intents = new Set<string>();
-  const initiatives = new Set<string>();
-  for (const o of objects) {
-    if (o.lifecycle !== "living") continue;
-    if (o.type === "intent") intents.add(o.id);
-    if (o.type === "initiative") initiatives.add(o.id);
+  try {
+    const override = normalizeWeightOverrides(JSON.parse(fs.readFileSync(p, "utf-8")));
+    return override ? { ...DEFAULT_WEIGHTS, ...override } : DEFAULT_WEIGHTS;
+  } catch {
+    return DEFAULT_WEIGHTS;
   }
-  return { intents, initiatives };
 }
 
-/** Compute the structural activation for every KO in the index. Pure function. */
-export function computeActivation(
-  idx: LoadedIndex,
-  weights: ActivationWeights = DEFAULT_WEIGHTS,
-): ActivationResult {
-  const { objects, relations, graph } = idx;
-  const { intents, initiatives } = activeAnchors(objects);
+export function runActivation(
+  vaultRoot: string,
+  options: { clock?: ClockPort } = {},
+): CoreResult<ActivationCache> {
+  const index = normalizeActivationIndex(loadCoreIndex(vaultRoot));
+  const weights = loadWeights(vaultRoot);
+  const clock = options.clock ?? new SystemClock();
 
-  // Precompute per-node: endorsement, validation, contradiction, strong-relation degree,
-  // and whether it links (either direction) to an active Intent/Initiative.
-  const endorsed = new Set<string>();
-  const validated = new Set<string>();
-  const hasContradiction = new Set<string>();
-  const degree = new Map<string, number>();
-  const linkedIntent = new Set<string>();
-  const linkedInitiative = new Set<string>();
+  const scored = scoreActivation(index, weights, clock);
+  if (!scored.ok) return scored;
 
-  const bump = (m: Map<string, number>, k: string) => m.set(k, (m.get(k) ?? 0) + 1);
+  const cache = materializeActivationCache(index, scored.value, weights);
+  persistActivation(vaultRoot, cache);
+  return { ok: true, value: cache };
+}
 
-  for (const r of relations as IndexedRelation[]) {
-    // degree: count strong relations touching either endpoint
-    bump(degree, r.source_id);
-    if (graph.nodes[r.target_id]) bump(degree, r.target_id);
+export function persistActivation(vaultRoot: string, result: ActivationCache): void {
+  writeCache(vaultRoot, "activation.json", result);
+}
 
-    if (r.relation === "respaldado_por" && isHuman(r.target_id)) endorsed.add(r.source_id);
-    if (r.relation === "validado_por" && isHuman(r.target_id)) validated.add(r.source_id);
-    if (r.relation === "contradice") {
-      hasContradiction.add(r.source_id);
-      if (graph.nodes[r.target_id]) hasContradiction.add(r.target_id);
-    }
-    // active anchor links (either direction)
-    if (intents.has(r.target_id)) linkedIntent.add(r.source_id);
-    if (intents.has(r.source_id)) linkedIntent.add(r.target_id);
-    if (initiatives.has(r.target_id)) linkedInitiative.add(r.source_id);
-    if (initiatives.has(r.source_id)) linkedInitiative.add(r.target_id);
+function normalizeWeightOverrides(raw: unknown): ActivationWeightOverride | null {
+  if (!raw || typeof raw !== "object") return null;
+
+  const record = raw as Record<string, unknown>;
+  if (
+    "humanEndorsement" in record ||
+    "humanValidation" in record ||
+    "centralityCap" in record ||
+    "hotThreshold" in record ||
+    "reactivableFloor" in record
+  ) {
+    return pickCoreWeights(record);
   }
+
+  if (
+    "human_endorsement" in record ||
+    "human_validation" in record ||
+    "centrality_cap" in record ||
+    "hot_threshold" in record ||
+    "reactivable_floor" in record
+  ) {
+    return pickLegacyWeights(record);
+  }
+
+  return null;
+}
+
+function pickCoreWeights(record: Record<string, unknown>): ActivationWeightOverride {
+  const weights: ActivationWeightOverride = {};
+  if (isFiniteNumber(record.humanEndorsement)) weights.humanEndorsement = record.humanEndorsement;
+  if (isFiniteNumber(record.humanValidation)) weights.humanValidation = record.humanValidation;
+  if (isFiniteNumber(record.centrality)) weights.centrality = record.centrality;
+  if (isFiniteNumber(record.centralityCap)) weights.centralityCap = record.centralityCap;
+  if (isFiniteNumber(record.hotThreshold)) weights.hotThreshold = record.hotThreshold;
+  if (isFiniteNumber(record.reactivableFloor)) weights.reactivableFloor = record.reactivableFloor;
+  return weights;
+}
+
+function pickLegacyWeights(record: Record<string, unknown>): ActivationWeightOverride {
+  const weights: ActivationWeightOverride = {};
+  if (isFiniteNumber(record.human_endorsement)) weights.humanEndorsement = record.human_endorsement;
+  if (isFiniteNumber(record.human_validation)) weights.humanValidation = record.human_validation;
+  if (isFiniteNumber(record.centrality)) weights.centrality = record.centrality;
+  if (isFiniteNumber(record.centrality_cap)) weights.centralityCap = record.centrality_cap;
+  if (isFiniteNumber(record.hot_threshold)) weights.hotThreshold = record.hot_threshold;
+  if (isFiniteNumber(record.reactivable_floor)) weights.reactivableFloor = record.reactivable_floor;
+  return weights;
+}
+
+function materializeActivationCache(
+  index: AtlasIndex,
+  scored: CoreActivationResult,
+  weights: ActivationWeights,
+): ActivationCache {
+  const strongRelationCounts = relationDegrees(index);
+  const activeAnchors = resolveActiveAnchors(index);
+  const contradiction = contradictionSignals(index);
 
   const entries: Record<string, ActivationEntry> = {};
   const bands = { ACTIVO: 0, REACTIVABLE: 0, FRIO: 0 };
 
-  for (const o of objects) {
-    const eEndorsed = endorsed.has(o.id) || o.endorsed_by_human === true;
-    const eValidated = validated.has(o.id) || o.validated_by_human === true;
-    const deg = degree.get(o.id) ?? 0;
-    const cappedDeg = Math.min(deg, weights.centrality_cap);
-    const eIntent = linkedIntent.has(o.id) || o.type === "intent" && o.lifecycle === "living";
-    const eInitiative = linkedInitiative.has(o.id);
-    const eTension = hasContradiction.has(o.id);
-
-    let raw =
-      (eEndorsed ? weights.human_endorsement : 0) +
-      (eValidated ? weights.human_validation : 0) +
-      cappedDeg * weights.centrality +
-      (eIntent ? weights.active_intent_link : 0) +
-      (eInitiative ? weights.active_initiative_link : 0) +
-      (eTension ? weights.tension_bonus : 0);
-
-    // normalize to 0..100 (clamp)
-    let score = Math.max(0, Math.min(100, raw));
-
-    // importance floor: an endorsed/validated KO is structurally important and must never be buried
-    const important = eEndorsed || eValidated;
-    if (important && score < weights.reactivable_floor) {
-      score = weights.reactivable_floor;
-    }
-
-    const band: Band =
-      score >= weights.hot_threshold
-        ? "ACTIVO"
-        : important
-          ? "REACTIVABLE"
-          : "FRIO";
-
-    bands[band]++;
-
-    entries[o.id] = {
-      id: o.id,
-      type: o.type,
-      title: o.title,
-      structural_score: Math.round(score),
+  for (const object of index.objects) {
+    const important = readHumanFlag(object.attributes, "endorsedByHuman", "respaldado_por")
+      || readHumanFlag(object.attributes, "validatedByHuman", "validado_por");
+    const score = scored.scores[object.id] ?? 0;
+    const band = scored.bands[object.id] ?? (score >= weights.hotThreshold ? "ACTIVO" : important ? "REACTIVABLE" : "FRIO");
+    const entry: ActivationEntry = {
+      id: object.id,
+      type: object.type,
+      title: object.title,
+      structural_score: score,
       band,
       signals: {
-        human_endorsement: eEndorsed,
-        human_validation: eValidated,
-        strong_relations: deg,
-        active_intent_link: eIntent,
-        active_initiative_link: eInitiative,
-        unresolved_contradiction: eTension,
+        human_endorsement: readHumanFlag(object.attributes, "endorsedByHuman", "respaldado_por"),
+        human_validation: readHumanFlag(object.attributes, "validatedByHuman", "validado_por"),
+        strong_relations: strongRelationCounts.get(object.id) ?? 0,
+        active_intent_link: activeAnchors.intents.has(object.id),
+        active_initiative_link: activeAnchors.initiatives.has(object.id),
+        unresolved_contradiction: contradiction.has(object.id),
       },
     };
+
+    entries[object.id] = entry;
+    bands[band]++;
   }
 
   return {
-    generated_at: new Date().toISOString(),
+    generated_at: scored.generatedAt,
     component: "structural",
-    weights,
+    weights: toLegacyWeights(weights),
     entries,
     bands,
-    note: "Structural component only (v0). Volatile component (time decay, recent usage) not yet computed; requires Task runtime usage signals. No auto-compression is driven by this score (observation-only period, RFC-001.2).",
+    note: DEFAULT_LEGACY_NOTE,
   };
 }
 
-// Note: human endorsement/validation are recovered by the P2 indexer as boolean flags on each
-// IndexedObject (endorsed_by_human / validated_by_human), because a relation cannot point at a
-// non-node "human" without breaking graph integrity. Activation reads those flags directly.
-
-import fs from "node:fs";
-import path from "node:path";
-
-/** Load weights from .atlas/activation-weights.json if present, else defaults (RFC-001.2 §5.3: weights are data). */
-export function loadWeights(vaultRoot: string): ActivationWeights {
-  const p = path.join(vaultRoot, ".atlas", "activation-weights.json");
-  if (fs.existsSync(p)) {
-    try {
-      const override = JSON.parse(fs.readFileSync(p, "utf-8"));
-      return { ...DEFAULT_WEIGHTS, ...override };
-    } catch {
-      // fall through to defaults on malformed config
-    }
-  }
-  return DEFAULT_WEIGHTS;
+function normalizeActivationIndex(index: AtlasIndex): AtlasIndex {
+  return {
+    ...index,
+    objects: index.objects.map((object) => ({
+      ...object,
+      attributes: {
+        ...object.attributes,
+        endorsedByHuman: readHumanFlag(object.attributes, "endorsedByHuman", "respaldado_por"),
+        validatedByHuman: readHumanFlag(object.attributes, "validatedByHuman", "validado_por"),
+      },
+    })),
+  };
 }
 
-/** Compute and persist activation to .atlas/cache/activation.json. */
-export function persistActivation(vaultRoot: string, result: ActivationResult): void {
-  writeCache(vaultRoot, "activation.json", result);
+function relationDegrees(index: AtlasIndex): ReadonlyMap<string, number> {
+  const objectIds = new Set(index.objects.map((object) => object.id));
+  const degrees = new Map<string, number>();
+  const bump = (id: string) => degrees.set(id, (degrees.get(id) ?? 0) + 1);
+
+  for (const relation of index.relations as readonly Relation[]) {
+    if (objectIds.has(relation.sourceId)) bump(relation.sourceId);
+    if (objectIds.has(relation.targetId)) bump(relation.targetId);
+  }
+
+  return degrees;
+}
+
+function resolveActiveAnchors(index: AtlasIndex): { intents: Set<string>; initiatives: Set<string> } {
+  const intents = new Set<string>();
+  const initiatives = new Set<string>();
+
+  for (const object of index.objects) {
+    if (object.lifecycle !== "living") continue;
+    if (object.type === "intent") intents.add(object.id);
+    if (object.type === "initiative") initiatives.add(object.id);
+  }
+
+  for (const relation of index.relations as readonly Relation[]) {
+    if (intents.has(relation.targetId)) intents.add(relation.sourceId);
+    if (intents.has(relation.sourceId)) intents.add(relation.targetId);
+    if (initiatives.has(relation.targetId)) initiatives.add(relation.sourceId);
+    if (initiatives.has(relation.sourceId)) initiatives.add(relation.targetId);
+  }
+
+  return { intents, initiatives };
+}
+
+function contradictionSignals(index: AtlasIndex): Set<string> {
+  const contradiction = new Set<string>();
+  const objectIds = new Set(index.objects.map((object) => object.id));
+
+  for (const relation of index.relations as readonly Relation[]) {
+    if (relation.kind !== "contradice") continue;
+    contradiction.add(relation.sourceId);
+    if (objectIds.has(relation.targetId)) contradiction.add(relation.targetId);
+  }
+
+  return contradiction;
+}
+
+function toLegacyWeights(weights: ActivationWeights): LegacyActivationWeights {
+  return {
+    human_endorsement: weights.humanEndorsement,
+    human_validation: weights.humanValidation,
+    centrality: weights.centrality,
+    centrality_cap: weights.centralityCap,
+    active_intent_link: DEFAULT_LEGACY_WEIGHTS.active_intent_link,
+    active_initiative_link: DEFAULT_LEGACY_WEIGHTS.active_initiative_link,
+    tension_bonus: DEFAULT_LEGACY_WEIGHTS.tension_bonus,
+    hot_threshold: weights.hotThreshold,
+    reactivable_floor: weights.reactivableFloor,
+  };
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function readHumanFlag(
+  attributes: Readonly<Record<string, unknown>>,
+  camelKey: string,
+  legacyKey: string,
+): boolean {
+  return attributes[camelKey] === true || isHumanFlag(attributes[legacyKey]);
+}
+
+function isHumanFlag(value: unknown): boolean {
+  if (value === "human") return true;
+  return Array.isArray(value) && value.includes("human");
 }

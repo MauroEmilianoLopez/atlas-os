@@ -9,10 +9,10 @@ import { runValidateCommand } from "./cli-validate.js";
 import { generateId } from "./id.js";
 import { createKO } from "./generator.js";
 import { buildIndex } from "./indexer.js";
-import { loadIndex, IndexNotBuiltError } from "./index-loader.js";
 import { resolveSeed, loadCoreIndex, renderContextResult, CoreIndexNotBuiltError } from "./adapters/index-json.js";
 import { assembleContext } from "./core/context.js";
-import { computeActivation, loadWeights, persistActivation, type ActivationEntry } from "./activation.js";
+import { runActivation, type ActivationEntry } from "./activation.js";
+import { SystemClock } from "./adapters/system-clock.js";
 import { ID_PREFIX } from "./types.js";
 
 const program = new Command();
@@ -189,40 +189,43 @@ program
   .description("Compute structural activation for every KO and cache it (Activation v0)")
   .action((vault: string, opts: { json: boolean; band?: string }) => {
     const root = path.resolve(process.cwd(), vault);
-    let idx;
     try {
-      idx = loadIndex(root);
+      const result = runActivation(root, { clock: new SystemClock() });
+
+      if (!result.ok) {
+        console.error(result.error.message);
+        process.exit(1);
+      }
+
+      const activation = result.value;
+
+      if (opts.json) {
+        console.log(JSON.stringify(activation, null, 2));
+        process.exit(0);
+      }
+
+      console.log("Atlas activation computed (structural component only).");
+      console.log(`Objects scored: ${Object.keys(activation.entries).length}`);
+      console.log(`Bands — ACTIVO: ${activation.bands.ACTIVO}  REACTIVABLE: ${activation.bands.REACTIVABLE}  FRIO: ${activation.bands.FRIO}`);
+      console.log(`Cached: ${vault}/.atlas/cache/activation.json`);
+      console.log("");
+
+      const entries = Object.values(activation.entries)
+        .filter((e: ActivationEntry) => !opts.band || e.band === opts.band)
+        .sort((a: ActivationEntry, b: ActivationEntry) => b.structural_score - a.structural_score);
+
+      console.log("Ranking (structural_score):");
+      for (const e of entries) {
+        console.log(`  ${String(e.structural_score).padStart(3)}  [${e.band.padEnd(11)}] ${e.type}: ${e.title}`);
+      }
+      process.exit(0);
     } catch (e) {
-      if (e instanceof IndexNotBuiltError) {
+      if (e instanceof CoreIndexNotBuiltError) {
         console.error(e.message);
         process.exit(1);
       }
       throw e;
     }
-
-    const result = computeActivation(idx, loadWeights(root));
-    persistActivation(root, result);
-
-    if (opts.json) {
-      console.log(JSON.stringify(result, null, 2));
-      process.exit(0);
-    }
-
-    console.log("Atlas activation computed (structural component only).");
-    console.log(`Objects scored: ${Object.keys(result.entries).length}`);
-    console.log(`Bands — ACTIVO: ${result.bands.ACTIVO}  REACTIVABLE: ${result.bands.REACTIVABLE}  FRIO: ${result.bands.FRIO}`);
-    console.log(`Cached: ${vault}/.atlas/cache/activation.json`);
-    console.log("");
-
-    const entries = Object.values(result.entries)
-      .filter((e: ActivationEntry) => !opts.band || e.band === opts.band)
-      .sort((a: ActivationEntry, b: ActivationEntry) => b.structural_score - a.structural_score);
-
-    console.log("Ranking (structural_score):");
-    for (const e of entries) {
-      console.log(`  ${String(e.structural_score).padStart(3)}  [${e.band.padEnd(11)}] ${e.type}: ${e.title}`);
-    }
-    process.exit(0);
   });
 
 program.parseAsync(process.argv);

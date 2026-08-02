@@ -147,14 +147,42 @@ describe("Atlas CLI compatibility contract", () => {
 
     const result = runCli("activation", vault);
     const cachePath = join(vault, ".atlas", "cache", "activation.json");
+    const cache = JSON.parse(readFileSync(cachePath, "utf8")) as {
+      generated_at: string;
+      component: string;
+      bands: Record<string, number>;
+      entries: Record<string, { structural_score: number; band: string; title: string }>;
+    };
 
     expect(result.status).toBe(0);
     expect(result.stderr).toBe("");
     expect(result.stdout).toContain("Atlas activation computed (structural component only).");
     expect(result.stdout).toContain("Objects scored: 13");
+    expect(result.stdout).toContain("Bands — ACTIVO: 8  REACTIVABLE: 5  FRIO: 0");
     expect(result.stdout).toContain(`Cached: ${vault}/.atlas/cache/activation.json`);
     expect(result.stdout).toContain("Ranking (structural_score):");
+    expect(result.stdout.indexOf("85  [ACTIVO")).toBeLessThan(result.stdout.indexOf("70  [ACTIVO"));
+    expect(result.stdout.indexOf("70  [ACTIVO")).toBeLessThan(result.stdout.indexOf("64  [ACTIVO"));
     expect(existsSync(cachePath)).toBe(true);
-    expect(Object.keys(JSON.parse(readFileSync(cachePath, "utf8")).entries)).toHaveLength(13);
+    expect(Object.keys(cache.entries)).toHaveLength(13);
+    expect(cache.bands).toEqual({ ACTIVO: 8, REACTIVABLE: 5, FRIO: 0 });
+  });
+
+  it("keeps activation JSON output identical to the persisted cache", () => {
+    expect(runCli("index", vault).status).toBe(0);
+
+    const result = runCli("activation", vault, "--json");
+    const cachePath = join(vault, ".atlas", "cache", "activation.json");
+    const cache = JSON.parse(readFileSync(cachePath, "utf8"));
+    const payload = JSON.parse(result.stdout);
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(payload).toEqual(cache);
+    expect(payload).toMatchObject({
+      generated_at: expect.any(String),
+      component: "structural",
+      bands: { ACTIVO: 8, REACTIVABLE: 5, FRIO: 0 },
+    });
   });
 });
