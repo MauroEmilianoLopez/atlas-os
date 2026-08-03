@@ -13,7 +13,7 @@ describe("validate CLI composition", () => {
     expect(exitCode).toBe(0);
     expect(lines).toEqual([
       "Atlas validation passed.",
-      "Files scanned: 17",
+      "Files scanned: 18",
       "Knowledge Objects: 13",
       "Relations checked: 18",
       "Task references checked: 1",

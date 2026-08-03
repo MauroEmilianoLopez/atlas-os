@@ -4,6 +4,7 @@ import { loadCoreIndex, resolveSeed } from "./adapters/index-json.js";
 import { runActivation, type ActivationCache } from "./activation.js";
 import { SystemClock } from "./adapters/system-clock.js";
 import { assembleContext } from "./core/context.js";
+import { readSessionState, type SessionStateSnapshot } from "./session-state.js";
 
 type ContinueNode = {
   readonly id: string;
@@ -15,6 +16,7 @@ type ContinueNode = {
 };
 
 export function runContinueCommand(vaultRoot: string, seedRef: string): string {
+  const sessionState = readSessionState(vaultRoot);
   const indexResult = buildIndex(vaultRoot, { write: true });
   if (!indexResult.ok) {
     throw new Error(`Atlas continue failed.\nReason: ${indexResult.reason ?? "unknown"}.`);
@@ -46,7 +48,14 @@ export function runContinueCommand(vaultRoot: string, seedRef: string): string {
     throw contextResult.error;
   }
 
-  return renderContinueBrief(index, activationResult.value, contextResult.value, seedRef, seedId);
+  return renderContinueBrief(
+    index,
+    activationResult.value,
+    contextResult.value,
+    seedRef,
+    seedId,
+    sessionState.ok ? sessionState.value : undefined,
+  );
 }
 
 function renderContinueBrief(
@@ -55,6 +64,7 @@ function renderContinueBrief(
   context: ContextResult,
   seedRef: string,
   seedId: string,
+  sessionState?: SessionStateSnapshot,
 ): string {
   const seed = index.objects.find((object) => object.id === seedId);
   const relatedNodes = prioritizeContinueNodes(
@@ -72,6 +82,18 @@ function renderContinueBrief(
   const lines: string[] = [];
   lines.push(`# Continuar: ${seed?.title ?? seedRef}`);
   lines.push("");
+  if (sessionState) {
+    lines.push("## Estado del trabajo");
+    lines.push(`- Work unit: **${sessionState.currentWorkUnit}**`);
+    lines.push(`- Rama: \`${sessionState.currentBranch}\``);
+    lines.push(`- Objetivo: ${sessionState.currentGoal}`);
+    lines.push(`- Estado: ${sessionState.status}`);
+    lines.push(`- Completado: ${renderCompactList(sessionState.completed)}`);
+    lines.push(`- Pendiente: ${renderCompactList(sessionState.pending)}`);
+    lines.push(`- Próximo paso: ${sessionState.nextStep}`);
+    lines.push(`- Decisiones recientes: ${renderCompactList(sessionState.lastDecisions)}`);
+    lines.push("");
+  }
   lines.push("## En qué estabas");
   lines.push(`- Estabas retomando **${seed?.title ?? seedRef}**.`);
   if (contextHighlights.length > 0) {
@@ -193,4 +215,12 @@ function renderNextStep(
 
   const label = item.sourcePath ?? item.title;
   return `Abrí primero \`${label}\` para retomar el trabajo desde el material más útil.`;
+}
+
+function renderCompactList(values: readonly string[]): string {
+  if (values.length === 0) {
+    return "Ninguno.";
+  }
+
+  return values.map((value) => `**${value}**`).join("; ");
 }
