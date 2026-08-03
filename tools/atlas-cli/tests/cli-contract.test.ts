@@ -71,7 +71,7 @@ describe("Atlas CLI compatibility contract", () => {
     expect(result.status).toBe(0);
     expect(result.stderr).toBe("");
     expect(result.stdout).toContain("Atlas validation passed.");
-    expect(result.stdout).toContain("Files scanned: 17");
+    expect(result.stdout).toContain("Files scanned: 18");
     expect(result.stdout).toContain("Knowledge Objects: 13");
     expect(result.stdout).toContain("Errors: 0");
     expect(result.stdout).toContain("Warnings: 0");
@@ -219,6 +219,10 @@ describe("Atlas CLI compatibility contract", () => {
     expect(fromRepoRoot.status).toBe(0);
     expect(fromRepoRoot.stderr).toBe("");
     expect(fromRepoRoot.stdout).toContain("# Continuar: Atlas OS");
+    expect(fromRepoRoot.stdout).toContain("## Estado del trabajo");
+    expect(fromRepoRoot.stdout).toContain("- Work unit: **feature/session-state**");
+    expect(fromRepoRoot.stdout).toContain("- Rama: `feature/cli-continue`");
+    expect(fromRepoRoot.stdout).toContain("- Próximo paso: Run the dogfood test");
     expect(fromRepoRoot.stdout).toContain("## En qué estabas");
     expect(fromRepoRoot.stdout).toContain("## Próximo paso");
     expect(fromRepoRoot.stdout).toContain("## Decisiones vigentes");
@@ -231,6 +235,7 @@ describe("Atlas CLI compatibility contract", () => {
     expect(fromRepoRoot.stdout).toContain("- **ADR-001 — Usar IDs estables en vez de paths como identidad** (decision) — `work/decisions/adr-001-use-ids-over-paths.md`");
     expect(fromRepoRoot.stdout).toContain("- **Context Engine** (concept) — `knowledge/concepts/context-engine.md`");
     expect(fromRepoRoot.stdout).toContain("- **El contexto se construye, no se lee** (insight) — `knowledge/insights/context-is-not-memory.md`");
+    expect(fromRepoRoot.stdout.indexOf("## Estado del trabajo")).toBeLessThan(fromRepoRoot.stdout.indexOf("## En qué estabas"));
     expect(sectionLines(fromRepoRoot.stdout, "## Contexto relacionado")).toEqual([
       "- **ADR-001 — Usar IDs estables en vez de paths como identidad** (decision) — `work/decisions/adr-001-use-ids-over-paths.md`",
       "- **Context Engine** (concept) — `knowledge/concepts/context-engine.md`",
@@ -253,6 +258,19 @@ describe("Atlas CLI compatibility contract", () => {
     expect(fromCliRoot.status).toBe(0);
     expect(fromCliRoot.stderr).toBe("");
     expect(fromCliRoot.stdout).toBe(fromRepoRoot.stdout);
+  });
+
+  it("keeps the current brief when Session State is absent", () => {
+    cpSync(fixtureVault, join(sandbox, "vault-no-state"), { recursive: true });
+    rmSync(join(sandbox, "vault-no-state", "work", "session-state.md"), { force: true });
+
+    const result = runCliFrom(repositoryRoot, "continue", "Atlas", join(sandbox, "vault-no-state"));
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).not.toContain("## Estado del trabajo");
+    expect(result.stdout).toContain("## En qué estabas");
+    expect(result.stdout).toContain("## Contexto relacionado");
   });
 
   it("explains clearly when an explicit vault path does not exist", () => {
