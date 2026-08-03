@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
+import { cpSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -212,6 +212,129 @@ describe("Atlas CLI compatibility contract", () => {
     });
   });
 
+  it("writes a Session State snapshot and makes continue render it first", () => {
+    const update = runCli(
+      "session",
+      "update",
+      "--vault",
+      vault,
+      "--work-unit",
+      "feature/session-update",
+      "--branch",
+      "feature/cli-session-update",
+      "--goal",
+      "Automate the operational session snapshot",
+      "--status",
+      "ready_to_commit",
+      "--next-step",
+      "Run the focused tests",
+      "--completed",
+      "atlas continue published",
+      "--pending",
+      "Review the writer contract",
+      "--decision",
+      "Session state lives outside the Core",
+    );
+
+    expect(update.status).toBe(0);
+    expect(update.stderr).toBe("");
+    expect(update.stdout).toContain("Session State updated.");
+    expect(update.stdout).toContain("work/session-state.md");
+    expect(readFileSync(join(vault, "work", "session-state.md"), "utf8")).toContain("current_work_unit: 'feature/session-update'");
+
+    const result = runCli("continue", "Atlas", vault);
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.stdout.indexOf("## Estado del trabajo")).toBeLessThan(result.stdout.indexOf("## En qué estabas"));
+    expect(result.stdout).toContain("- Work unit: **feature/session-update**");
+    expect(result.stdout).toContain("- Próximo paso: Run the focused tests");
+  });
+
+  it("fails session update when a required field is missing without changing the snapshot", () => {
+    const sessionStatePath = join(vault, "work", "session-state.md");
+    const before = readFileSync(sessionStatePath, "utf8");
+
+    const result = runCli(
+      "session",
+      "update",
+      "--vault",
+      vault,
+      "--work-unit",
+      "feature/session-update",
+      "--branch",
+      "feature/cli-session-update",
+      "--goal",
+      "Automate the operational session snapshot",
+      "--status",
+      "ready_to_commit",
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("required option '--next-step <step>' not specified");
+    expect(readFileSync(sessionStatePath, "utf8")).toBe(before);
+  });
+
+  it("fails session update when completed exceeds the limit without changing the snapshot", () => {
+    const sessionStatePath = join(vault, "work", "session-state.md");
+    const before = readFileSync(sessionStatePath, "utf8");
+
+    const result = runCli(
+      "session",
+      "update",
+      "--vault",
+      vault,
+      "--work-unit",
+      "feature/session-update",
+      "--branch",
+      "feature/cli-session-update",
+      "--goal",
+      "Automate the operational session snapshot",
+      "--status",
+      "ready_to_commit",
+      "--next-step",
+      "Run the focused tests",
+      "--completed",
+      "a",
+      "--completed",
+      "b",
+      "--completed",
+      "c",
+      "--completed",
+      "d",
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('Session State field "completed" must contain at most 3 items.');
+    expect(readFileSync(sessionStatePath, "utf8")).toBe(before);
+  });
+
+  it("fails session update when status is invalid without changing the snapshot", () => {
+    const sessionStatePath = join(vault, "work", "session-state.md");
+    const before = readFileSync(sessionStatePath, "utf8");
+
+    const result = runCli(
+      "session",
+      "update",
+      "--vault",
+      vault,
+      "--work-unit",
+      "feature/session-update",
+      "--branch",
+      "feature/cli-session-update",
+      "--goal",
+      "Automate the operational session snapshot",
+      "--status",
+      "invalid",
+      "--next-step",
+      "Run the focused tests",
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("Session State status must be one of:");
+    expect(readFileSync(sessionStatePath, "utf8")).toBe(before);
+  });
+
   it("creates a single Markdown brief for resuming a topic without requiring prior index or activation runs", () => {
     const fromRepoRoot = runCliFrom(repositoryRoot, "continue", "Atlas");
     const fromCliRoot = runCliFrom(cliRoot, "continue", "Atlas");
@@ -222,7 +345,7 @@ describe("Atlas CLI compatibility contract", () => {
     expect(fromRepoRoot.stdout).toContain("## Estado del trabajo");
     expect(fromRepoRoot.stdout).toContain("- Work unit: **feature/session-state**");
     expect(fromRepoRoot.stdout).toContain("- Rama: `feature/cli-continue`");
-    expect(fromRepoRoot.stdout).toContain("- Próximo paso: Run the dogfood test");
+    expect(fromRepoRoot.stdout).toContain("- Próximo paso: Use atlas continue in daily work");
     expect(fromRepoRoot.stdout).toContain("## En qué estabas");
     expect(fromRepoRoot.stdout).toContain("## Próximo paso");
     expect(fromRepoRoot.stdout).toContain("## Decisiones vigentes");
@@ -265,6 +388,18 @@ describe("Atlas CLI compatibility contract", () => {
     rmSync(join(sandbox, "vault-no-state", "work", "session-state.md"), { force: true });
 
     const result = runCliFrom(repositoryRoot, "continue", "Atlas", join(sandbox, "vault-no-state"));
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).not.toContain("## Estado del trabajo");
+    expect(result.stdout).toContain("## En qué estabas");
+    expect(result.stdout).toContain("## Contexto relacionado");
+  });
+
+  it("keeps continue tolerant when Session State is corrupt", () => {
+    writeFileSync(join(vault, "work", "session-state.md"), "this is not a valid session state", "utf8");
+
+    const result = runCliFrom(repositoryRoot, "continue", "Atlas", vault);
 
     expect(result.status).toBe(0);
     expect(result.stderr).toBe("");
