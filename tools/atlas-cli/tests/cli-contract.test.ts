@@ -8,14 +8,22 @@ import { fileURLToPath } from "node:url";
 const repositoryRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const cliRoot = join(repositoryRoot, "tools", "atlas-cli");
 const tsxCli = join(cliRoot, "node_modules", "tsx", "dist", "cli.mjs");
+const cliEntry = join(cliRoot, "src", "cli.ts");
 const fixtureVault = join(repositoryRoot, "vault-prototype");
 
 let sandbox: string;
 let vault: string;
 
 function runCli(...args: string[]) {
-  return spawnSync(process.execPath, [tsxCli, "src/cli.ts", ...args], {
+  return spawnSync(process.execPath, [tsxCli, cliEntry, ...args], {
     cwd: cliRoot,
+    encoding: "utf8",
+  });
+}
+
+function runCliFrom(cwd: string, ...args: string[]) {
+  return spawnSync(process.execPath, [tsxCli, cliEntry, ...args], {
+    cwd,
     encoding: "utf8",
   });
 }
@@ -25,6 +33,24 @@ function listFiles(root: string): string[] {
     const path = join(root, entry.name);
     return entry.isDirectory() ? listFiles(path) : [`${path}:${statSync(path).size}`];
   }).sort();
+}
+
+function sectionLines(stdout: string, header: string): string[] {
+  const lines = stdout.split(/\r?\n/);
+  const start = lines.indexOf(header);
+
+  if (start < 0) {
+    throw new Error(`Section not found: ${header}`);
+  }
+
+  const collected: string[] = [];
+  for (let i = start + 1; i < lines.length; i += 1) {
+    const line = lines[i];
+    if (!line || line.startsWith("## ")) break;
+    collected.push(line);
+  }
+
+  return collected;
 }
 
 beforeEach(() => {
@@ -184,5 +210,57 @@ describe("Atlas CLI compatibility contract", () => {
       component: "structural",
       bands: { ACTIVO: 8, REACTIVABLE: 5, FRIO: 0 },
     });
+  });
+
+  it("creates a single Markdown brief for resuming a topic without requiring prior index or activation runs", () => {
+    const fromRepoRoot = runCliFrom(repositoryRoot, "continue", "Atlas");
+    const fromCliRoot = runCliFrom(cliRoot, "continue", "Atlas");
+
+    expect(fromRepoRoot.status).toBe(0);
+    expect(fromRepoRoot.stderr).toBe("");
+    expect(fromRepoRoot.stdout).toContain("# Continuar: Atlas OS");
+    expect(fromRepoRoot.stdout).toContain("## En qué estabas");
+    expect(fromRepoRoot.stdout).toContain("## Próximo paso");
+    expect(fromRepoRoot.stdout).toContain("## Decisiones vigentes");
+    expect(fromRepoRoot.stdout).toContain("## Contexto relacionado");
+    expect(fromRepoRoot.stdout).toContain("## Archivos para abrir");
+    expect(fromRepoRoot.stdout).toContain("La decisión vigente más sensible es **ADR-001 — Usar IDs estables en vez de paths como identidad**.");
+    expect(sectionLines(fromRepoRoot.stdout, "## Decisiones vigentes")).toEqual([
+      "- [d1] **ADR-001 — Usar IDs estables en vez de paths como identidad** (decision) — score `85` — `work/decisions/adr-001-use-ids-over-paths.md`",
+    ]);
+    expect(fromRepoRoot.stdout).toContain("- **ADR-001 — Usar IDs estables en vez de paths como identidad** (decision) — `work/decisions/adr-001-use-ids-over-paths.md`");
+    expect(fromRepoRoot.stdout).toContain("- **Context Engine** (concept) — `knowledge/concepts/context-engine.md`");
+    expect(fromRepoRoot.stdout).toContain("- **El contexto se construye, no se lee** (insight) — `knowledge/insights/context-is-not-memory.md`");
+    expect(sectionLines(fromRepoRoot.stdout, "## Contexto relacionado")).toEqual([
+      "- **ADR-001 — Usar IDs estables en vez de paths como identidad** (decision) — `work/decisions/adr-001-use-ids-over-paths.md`",
+      "- **Context Engine** (concept) — `knowledge/concepts/context-engine.md`",
+      "- **El contexto se construye, no se lee** (insight) — `knowledge/insights/context-is-not-memory.md`",
+    ]);
+    expect(sectionLines(fromRepoRoot.stdout, "## Archivos para abrir")).toEqual([
+      "1. Primero `work/decisions/adr-001-use-ids-over-paths.md`",
+      "2. `knowledge/concepts/context-engine.md`",
+      "3. `work/initiatives/2026-atlas-os.md`",
+      "4. `knowledge/insights/context-is-not-memory.md`",
+      "5. `execution/agents/claude-research-agent.md`",
+    ]);
+    expect(fromRepoRoot.stdout).not.toContain("Seed:");
+    expect(fromRepoRoot.stdout).not.toContain("Validate:");
+    expect(fromRepoRoot.stdout).not.toContain("files scanned");
+    expect(fromRepoRoot.stdout).not.toContain("knowledge objects");
+    expect(fromRepoRoot.stdout).not.toContain("relations");
+    expect(fromRepoRoot.stdout).not.toContain("tasks");
+
+    expect(fromCliRoot.status).toBe(0);
+    expect(fromCliRoot.stderr).toBe("");
+    expect(fromCliRoot.stdout).toBe(fromRepoRoot.stdout);
+  });
+
+  it("explains clearly when an explicit vault path does not exist", () => {
+    const result = runCliFrom(repositoryRoot, "continue", "Atlas", join(repositoryRoot, "missing-vault"));
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("No se encontró un vault válido.");
+    expect(result.stderr).toContain(join(repositoryRoot, "missing-vault"));
+    expect(result.stderr).toContain("Ejecuta el comando desde el repositorio o pasa explícitamente la ruta del vault.");
   });
 });

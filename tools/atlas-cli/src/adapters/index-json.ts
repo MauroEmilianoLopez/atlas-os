@@ -90,7 +90,28 @@ export function resolveSeed(index: AtlasIndex, ref: string): string | null {
   if (bySlug) return bySlug.id;
 
   const byTitle = index.objects.find((object) => object.title.toLowerCase() === ref.toLowerCase());
-  return byTitle?.id ?? null;
+  if (byTitle) return byTitle.id;
+
+  const normalizedRef = normalizeSeedText(ref);
+  const fuzzyMatches = index.objects.filter((object) => {
+    const normalizedTitle = normalizeSeedText(object.title);
+    return normalizedTitle.startsWith(normalizedRef) || normalizedTitle.includes(normalizedRef);
+  });
+  if (fuzzyMatches.length === 1) return fuzzyMatches[0].id;
+
+  const initiativeMatches = fuzzyMatches.filter((object) => object.type === "initiative");
+  if (initiativeMatches.length === 1) return initiativeMatches[0].id;
+
+  return null;
+}
+
+function normalizeSeedText(value: string): string {
+  return value
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim()
+    .replace(/\s+/g, " ");
 }
 
 export function renderContextResult(index: AtlasIndex, ctx: ContextResult): string {

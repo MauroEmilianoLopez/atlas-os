@@ -13,6 +13,8 @@ import { resolveSeed, loadCoreIndex, renderContextResult, CoreIndexNotBuiltError
 import { assembleContext } from "./core/context.js";
 import { runActivation, type ActivationEntry } from "./activation.js";
 import { SystemClock } from "./adapters/system-clock.js";
+import { runContinueCommand } from "./continue.js";
+import { resolveVaultRoot } from "./vault.js";
 import { ID_PREFIX } from "./types.js";
 
 const program = new Command();
@@ -31,13 +33,22 @@ function parseContextBudget(raw: string): number {
   return Number.isFinite(parsed) ? Math.max(0, Math.ceil(parsed)) : 20;
 }
 
+function requireVaultRoot(vault?: string): string {
+  const resolved = resolveVaultRoot(vault);
+  if ("ok" in resolved) {
+    console.error(resolved.message);
+    process.exit(1);
+  }
+  return resolved.root;
+}
+
 // --- validate ---
 program
   .command("validate")
-  .argument("[vault]", "path to the vault root", "vault-prototype")
+  .argument("[vault]", "path to the vault root")
   .description("Validate all Knowledge Objects, relations and task references in a vault")
-  .action((vault: string) => {
-    const root = path.resolve(process.cwd(), vault);
+  .action((vault?: string) => {
+    const root = requireVaultRoot(vault);
     process.exit(runValidateCommand(root, console.log));
   });
 
@@ -60,11 +71,11 @@ program
   .description("Create a new minimal Knowledge Object from a template")
   .requiredOption("--type <type>", "KO type")
   .requiredOption("--title <title>", "human-readable title")
-  .option("--vault <path>", "vault root", "vault-prototype")
+  .option("--vault <path>", "vault root")
   .option("--date <date>", "YYYY-MM-DD (defaults to today)")
   .option("--force", "overwrite if the file already exists", false)
-  .action((opts: { type: string; title: string; vault: string; date?: string; force: boolean }) => {
-    const root = path.resolve(process.cwd(), opts.vault);
+  .action((opts: { type: string; title: string; vault?: string; date?: string; force: boolean }) => {
+    const root = requireVaultRoot(opts.vault);
     try {
       const res = createKO(root, { type: opts.type, title: opts.title, date: opts.date }, opts.force);
       if (!res.created) {
@@ -82,11 +93,11 @@ program
 // --- index ---
 program
   .command("index")
-  .argument("[vault]", "path to the vault root", "vault-prototype")
+  .argument("[vault]", "path to the vault root")
   .option("--clean", "remove the previous index before rebuilding", false)
   .description("Build the external regenerable index under .atlas/index/ (validates first)")
-  .action((vault: string, opts: { clean: boolean }) => {
-    const root = path.resolve(process.cwd(), vault);
+  .action((vault: string | undefined, opts: { clean: boolean }) => {
+    const root = requireVaultRoot(vault);
     const r = buildIndex(root, { clean: opts.clean, write: true });
 
     if (!r.ok) {
@@ -100,7 +111,7 @@ program
     console.log(`Objects: ${r.objects.length}`);
     console.log(`Relations: ${r.relations.length}`);
     console.log(`Tasks: ${r.tasks.length}`);
-    console.log(`Output: ${vault}/.atlas/index/`);
+    console.log(`Output: ${root}/.atlas/index/`);
     process.exit(0);
   });
 
@@ -108,7 +119,7 @@ program
 program
   .command("context")
   .argument("<seed>", "seed reference: an id, a file slug, a path, or a title")
-  .argument("[vault]", "path to the vault root", "vault-prototype")
+  .argument("[vault]", "path to the vault root")
   .option("--hops <n>", "max traversal depth", "2")
   .option("--budget <n>", "max nodes in the assembled context", "20")
   .option("--direction <dir>", "out | in | both", "both")
@@ -116,8 +127,8 @@ program
   .option("--rank", "rank neighbors by cached activation score under budget", false)
   .option("--json", "output the raw context subgraph as JSON", false)
   .description("Assemble the minimal context subgraph around a seed (Context Engine v0)")
-  .action((seed: string, vault: string, opts: { hops: string; budget: string; direction: string; coreOnly: boolean; rank: boolean; json: boolean }) => {
-    const root = path.resolve(process.cwd(), vault);
+  .action((seed: string, vault: string | undefined, opts: { hops: string; budget: string; direction: string; coreOnly: boolean; rank: boolean; json: boolean }) => {
+    const root = requireVaultRoot(vault);
     let idx;
     try {
       idx = loadCoreIndex(root);
@@ -183,12 +194,12 @@ program
 // --- activation ---
 program
   .command("activation")
-  .argument("[vault]", "path to the vault root", "vault-prototype")
+  .argument("[vault]", "path to the vault root")
   .option("--json", "output the full activation result as JSON", false)
   .option("--band <band>", "filter listing to a band: ACTIVO | REACTIVABLE | FRIO")
   .description("Compute structural activation for every KO and cache it (Activation v0)")
-  .action((vault: string, opts: { json: boolean; band?: string }) => {
-    const root = path.resolve(process.cwd(), vault);
+  .action((vault: string | undefined, opts: { json: boolean; band?: string }) => {
+    const root = requireVaultRoot(vault);
     try {
       const result = runActivation(root, { clock: new SystemClock() });
 
@@ -225,6 +236,28 @@ program
         process.exit(1);
       }
       throw e;
+    }
+  });
+
+// --- continue ---
+program
+  .command("continue")
+  .argument("<seed>", "seed reference: an id, a file slug, a path, or a title")
+  .argument("[vault]", "path to the vault root")
+  .description("Create a compact Markdown brief to resume a work topic with any model")
+  .action((seed: string, vault: string | undefined) => {
+    const root = requireVaultRoot(vault);
+    try {
+      console.log(runContinueCommand(root, seed));
+      process.exit(0);
+    } catch (e) {
+      if (e instanceof CoreIndexNotBuiltError) {
+        console.error(e.message);
+        process.exit(1);
+      }
+
+      console.error((e as Error).message);
+      process.exit(1);
     }
   });
 
