@@ -14,6 +14,7 @@ import { assembleContext } from "./core/context.js";
 import { runActivation, type ActivationEntry } from "./activation.js";
 import { SystemClock } from "./adapters/system-clock.js";
 import { runContinueCommand } from "./continue.js";
+import { normalizeSessionStateUpdate, writeSessionState, type SessionStateUpdateInput } from "./session-state.js";
 import { resolveVaultRoot } from "./vault.js";
 import { ID_PREFIX } from "./types.js";
 
@@ -40,6 +41,10 @@ function requireVaultRoot(vault?: string): string {
     process.exit(1);
   }
   return resolved.root;
+}
+
+function collectRepeatableOption(value: string, previous: string[] = []): string[] {
+  return [...previous, value];
 }
 
 // --- validate ---
@@ -236,6 +241,64 @@ program
         process.exit(1);
       }
       throw e;
+    }
+  });
+
+// --- session ---
+const session = program.command("session").description("Manage the Session State snapshot");
+
+session
+  .command("update")
+  .option("--vault <path>", "vault root")
+  .requiredOption("--work-unit <work-unit>", "current work unit")
+  .requiredOption("--branch <branch>", "current branch")
+  .requiredOption("--goal <goal>", "current goal")
+  .requiredOption("--status <status>", "active | blocked | ready_for_review | ready_to_commit | published | done")
+  .option("--completed <item>", "completed item", collectRepeatableOption, [] as string[])
+  .option("--pending <item>", "pending item", collectRepeatableOption, [] as string[])
+  .requiredOption("--next-step <step>", "next concrete step")
+  .option("--decision <item>", "recent decision", collectRepeatableOption, [] as string[])
+  .option("--updated-at <timestamp>", "ISO-8601 timestamp")
+  .description("Write the operational Session State snapshot into the vault")
+  .action((opts: {
+    vault?: string;
+    workUnit: string;
+    branch: string;
+    goal: string;
+    status: string;
+    completed: string[];
+    pending: string[];
+    nextStep: string;
+    decision: string[];
+    updatedAt?: string;
+  }) => {
+    const root = requireVaultRoot(opts.vault);
+    const payload: SessionStateUpdateInput = {
+      currentWorkUnit: opts.workUnit,
+      currentBranch: opts.branch,
+      currentGoal: opts.goal,
+      status: opts.status as SessionStateUpdateInput["status"],
+      completed: opts.completed,
+      pending: opts.pending,
+      nextStep: opts.nextStep,
+      lastDecisions: opts.decision,
+      updatedAt: opts.updatedAt,
+    };
+
+    const normalized = normalizeSessionStateUpdate(payload);
+    if (!normalized.ok) {
+      console.error(normalized.message);
+      process.exit(1);
+    }
+
+    try {
+      const result = writeSessionState(root, normalized.value);
+      console.log("Session State updated.");
+      console.log(`File: ${path.relative(root, result.path).replace(/\\/g, "/")}`);
+      process.exit(0);
+    } catch (error) {
+      console.error((error as Error).message);
+      process.exit(1);
     }
   });
 

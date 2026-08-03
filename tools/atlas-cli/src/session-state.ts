@@ -24,9 +24,25 @@ export interface SessionStateSnapshot {
   readonly lastDecisions: readonly string[];
 }
 
+export interface SessionStateUpdateInput {
+  readonly currentWorkUnit: string;
+  readonly currentBranch: string;
+  readonly currentGoal: string;
+  readonly status: SessionStateStatus;
+  readonly nextStep: string;
+  readonly completed?: readonly string[];
+  readonly pending?: readonly string[];
+  readonly lastDecisions?: readonly string[];
+  readonly updatedAt?: string;
+}
+
 export type SessionStateReadResult =
   | { readonly ok: true; readonly value: SessionStateSnapshot }
   | { readonly ok: false; readonly reason: "missing" | "invalid"; readonly message: string };
+
+export type SessionStateValidationResult =
+  | { readonly ok: true; readonly value: SessionStateSnapshot }
+  | { readonly ok: false; readonly reason: "invalid"; readonly message: string };
 
 const SESSION_STATE_FILE = path.join("work", "session-state.md");
 const SESSION_STATE_STATUSES = new Set<SessionStateStatus>([
@@ -75,6 +91,64 @@ export function readSessionState(vaultRoot: string): SessionStateReadResult {
       message: `Invalid Session State: ${(error as Error).message}`,
     };
   }
+}
+
+export function normalizeSessionStateUpdate(input: SessionStateUpdateInput): SessionStateValidationResult {
+  const schemaVersion = parseSchemaVersion(1);
+  const updatedAt = parseRequiredString(input.updatedAt ?? new Date().toISOString(), "updated_at");
+  const currentWorkUnit = parseRequiredString(input.currentWorkUnit, "current_work_unit");
+  const currentBranch = parseRequiredString(input.currentBranch, "current_branch");
+  const currentGoal = parseRequiredString(input.currentGoal, "current_goal");
+  const status = parseStatus(input.status);
+  const completed = parseStringList(input.completed, "completed");
+  const pending = parseStringList(input.pending, "pending");
+  const nextStep = parseRequiredString(input.nextStep, "next_step");
+  const lastDecisions = parseStringList(input.lastDecisions, "last_decisions");
+
+  if (!schemaVersion.ok) return schemaVersion;
+  if (!updatedAt.ok) return updatedAt;
+  if (!currentWorkUnit.ok) return currentWorkUnit;
+  if (!currentBranch.ok) return currentBranch;
+  if (!currentGoal.ok) return currentGoal;
+  if (!status.ok) return status;
+  if (!completed.ok) return completed;
+  if (!pending.ok) return pending;
+  if (!nextStep.ok) return nextStep;
+  if (!lastDecisions.ok) return lastDecisions;
+
+  return {
+    ok: true,
+    value: {
+      schemaVersion: schemaVersion.value,
+      updatedAt: updatedAt.value,
+      currentWorkUnit: currentWorkUnit.value,
+      currentBranch: currentBranch.value,
+      currentGoal: currentGoal.value,
+      status: status.value,
+      completed: completed.value,
+      pending: pending.value,
+      nextStep: nextStep.value,
+      lastDecisions: lastDecisions.value,
+    },
+  };
+}
+
+export function writeSessionState(vaultRoot: string, snapshot: SessionStateSnapshot): { readonly ok: true; readonly path: string } {
+  const absPath = path.join(vaultRoot, SESSION_STATE_FILE);
+  const dir = path.dirname(absPath);
+  const tempPath = path.join(dir, `${path.basename(absPath)}.${process.pid}.${Date.now()}.tmp`);
+
+  fs.mkdirSync(dir, { recursive: true });
+  try {
+    fs.writeFileSync(tempPath, renderSessionState(snapshot), "utf8");
+    fs.renameSync(tempPath, absPath);
+  } finally {
+    if (fs.existsSync(tempPath)) {
+      fs.rmSync(tempPath, { force: true });
+    }
+  }
+
+  return { ok: true, path: absPath };
 }
 
 export function renderSessionState(snapshot: SessionStateSnapshot): string {
@@ -257,7 +331,7 @@ function parseStatus(value: unknown): { readonly ok: true; readonly value: Sessi
 }
 
 function parseStringList(value: unknown, key: string): { readonly ok: true; readonly value: string[] } | { readonly ok: false; readonly reason: "invalid"; readonly message: string } {
-  if (value === undefined) return { ok: true, value: [] };
+  if (value === undefined || value === null) return { ok: true, value: [] };
   if (!Array.isArray(value)) {
     return { ok: false, reason: "invalid", message: `Session State field "${key}" must be a list of strings.` };
   }
