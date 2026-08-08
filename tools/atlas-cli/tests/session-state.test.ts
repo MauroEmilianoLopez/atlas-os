@@ -103,6 +103,20 @@ describe("session state", () => {
     if (invalidStatus.ok) return;
     expect(invalidStatus.message).toContain("status must be one of");
 
+    const invalidUpdatedAt = normalizeSessionStateUpdate({
+      currentWorkUnit: "feature/session-update",
+      currentBranch: "feature/cli-session-update",
+      currentGoal: "Automate the operational session snapshot",
+      status: "ready_to_commit",
+      nextStep: "Run the focused tests",
+      updatedAt: "2026-02-30T10:00:00Z",
+    });
+
+    expect(invalidUpdatedAt.ok).toBe(false);
+    if (invalidUpdatedAt.ok) return;
+    expect(invalidUpdatedAt.message).toContain("updated_at");
+    expect(invalidUpdatedAt.message).toContain("ISO-8601");
+
     for (const [key, payload] of [
       ["completed", { completed: ["a", "b", "c", "d"] }],
       ["pending", { pending: ["a", "b", "c", "d"] }],

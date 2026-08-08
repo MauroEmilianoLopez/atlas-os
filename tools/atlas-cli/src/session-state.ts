@@ -53,6 +53,7 @@ const SESSION_STATE_STATUSES = new Set<SessionStateStatus>([
   "published",
   "done",
 ]);
+const ISO_8601_TIMESTAMP = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?(Z|[+-](\d{2}):(\d{2}))$/;
 
 export function readSessionState(vaultRoot: string): SessionStateReadResult {
   const absPath = path.join(vaultRoot, SESSION_STATE_FILE);
@@ -95,7 +96,7 @@ export function readSessionState(vaultRoot: string): SessionStateReadResult {
 
 export function normalizeSessionStateUpdate(input: SessionStateUpdateInput): SessionStateValidationResult {
   const schemaVersion = parseSchemaVersion(1);
-  const updatedAt = parseRequiredString(input.updatedAt ?? new Date().toISOString(), "updated_at");
+  const updatedAt = parseIso8601Timestamp(input.updatedAt ?? new Date().toISOString(), "updated_at");
   const currentWorkUnit = parseRequiredString(input.currentWorkUnit, "current_work_unit");
   const currentBranch = parseRequiredString(input.currentBranch, "current_branch");
   const currentGoal = parseRequiredString(input.currentGoal, "current_goal");
@@ -317,6 +318,41 @@ function parseRequiredString(value: unknown, key: string): { readonly ok: true; 
     return { ok: false, reason: "invalid", message: `Session State field "${key}" must be a non-empty string.` };
   }
   return { ok: true, value: value.trim() };
+}
+
+function parseIso8601Timestamp(value: unknown, key: string): { readonly ok: true; readonly value: string } | { readonly ok: false; readonly reason: "invalid"; readonly message: string } {
+  const parsed = parseRequiredString(value, key);
+  if (!parsed.ok) return parsed;
+
+  const match = ISO_8601_TIMESTAMP.exec(parsed.value);
+  if (match === null) {
+    return { ok: false, reason: "invalid", message: `Session State field "${key}" must be a valid ISO-8601 timestamp.` };
+  }
+
+  const [, year, month, day, hour, minute, second, , offsetHour, offsetMinute] = match;
+  const numericYear = Number(year);
+  const numericMonth = Number(month);
+  const numericDay = Number(day);
+  const numericHour = Number(hour);
+  const numericMinute = Number(minute);
+  const numericSecond = second === undefined ? 0 : Number(second);
+  const numericOffsetHour = offsetHour === undefined ? 0 : Number(offsetHour);
+  const numericOffsetMinute = offsetMinute === undefined ? 0 : Number(offsetMinute);
+  const daysInMonth = new Date(Date.UTC(numericYear, numericMonth, 0)).getUTCDate();
+
+  if (
+    numericMonth < 1 || numericMonth > 12 ||
+    numericDay < 1 || numericDay > daysInMonth ||
+    numericHour > 23 ||
+    numericMinute > 59 ||
+    numericSecond > 59 ||
+    numericOffsetHour > 23 ||
+    numericOffsetMinute > 59
+  ) {
+    return { ok: false, reason: "invalid", message: `Session State field "${key}" must be a valid ISO-8601 timestamp.` };
+  }
+
+  return { ok: true, value: parsed.value };
 }
 
 function parseStatus(value: unknown): { readonly ok: true; readonly value: SessionStateStatus } | { readonly ok: false; readonly reason: "invalid"; readonly message: string } {
