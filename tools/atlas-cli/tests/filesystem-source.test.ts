@@ -20,7 +20,7 @@ describe("FilesystemKnowledgeSource", () => {
     expect(snapshot.objects).toHaveLength(13);
     expect(snapshot.relations).toHaveLength(18);
     expect(snapshot.tasks).toHaveLength(1);
-    expect(snapshot.validation).toEqual({ filesScanned: 18, taskLogs: 1, diagnostics: [] });
+    expect(snapshot.validation).toEqual({ filesScanned: 19, taskLogs: 1, diagnostics: [] });
   });
 
   it("reports malformed YAML as a continuable source diagnostic", () => {

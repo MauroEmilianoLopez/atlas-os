@@ -81,7 +81,7 @@ describe("Atlas CLI compatibility contract", () => {
     expect(result.status).toBe(0);
     expect(result.stderr).toBe("");
     expect(result.stdout).toContain("Atlas validation passed.");
-    expect(result.stdout).toContain("Files scanned: 18");
+    expect(result.stdout).toContain("Files scanned: 19");
     expect(result.stdout).toContain("Knowledge Objects: 13");
     expect(result.stdout).toContain("Errors: 0");
     expect(result.stdout).toContain("Warnings: 0");
