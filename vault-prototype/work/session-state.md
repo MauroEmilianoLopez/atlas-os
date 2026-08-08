@@ -1,29 +1,28 @@
 # Session State
 
-schema_version: 1
-updated_at: '2026-08-03T22:10:00-03:00'
-current_work_unit: 'feature/session-state'
-current_branch: 'feature/cli-continue'
-current_goal: 'Add a minimal session state to improve continue'
-status: published
-completed:
-  - 'atlas continue published'
-  - 'dogfood validated with a fresh chat'
-pending: []
-next_step: 'Use atlas continue in daily work'
-last_decisions:
-  - 'Session state lives outside the Core'
-  - 'Single snapshot only, no conversation history'
+## Estado actual
 
-## Completed
-- atlas continue published
+work_unit: 'feature/session-update'
+branch: 'feature/session-update'
+objetivo_actual: 'Close the Session State update slice'
+estado: published
+completados:
+  - 'Session State implemented'
+  - 'atlas session update published'
+  - 'ISO-8601 validation added'
+pendientes: []
+proximo_paso: 'Define the next Atlas slice'
 
-## Pending
-- None.
+## Historial de decisiones
 
-## Next Step
-- Use atlas continue in daily work
+## 2026-08-03 22:10 — feature/cli-continue — base legacy
 
-## Recent Decisions
-- Session state lives outside the Core
-- Single snapshot only, no conversation history
+decisión: Session state lives outside the Core
+
+context: Migrated from legacy Session State; first reachable Git evidence: 0466056.
+
+## 2026-08-03 22:10 — feature/cli-continue — base legacy
+
+decisión: Single snapshot only, no conversation history
+
+context: Migrated from legacy Session State; first reachable Git evidence: 0466056.
