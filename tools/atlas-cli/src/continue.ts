@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import type { AtlasIndex, ContextResult } from "./core/contracts.js";
 import { buildIndex } from "./indexer.js";
 import { loadCoreIndex, resolveSeed } from "./adapters/index-json.js";
@@ -15,8 +17,9 @@ type ContinueNode = {
   readonly score: number;
 };
 
-export function runContinueCommand(vaultRoot: string, seedRef: string): string {
+export function runContinueCommand(vaultRoot: string, seedRef: string, agent: string): string {
   const sessionState = readSessionState(vaultRoot);
+  const scratch = readScratch(vaultRoot, agent);
   const indexResult = buildIndex(vaultRoot, { write: true });
   if (!indexResult.ok) {
     throw new Error(`Atlas continue failed.\nReason: ${indexResult.reason ?? "unknown"}.`);
@@ -55,6 +58,8 @@ export function runContinueCommand(vaultRoot: string, seedRef: string): string {
     seedRef,
     seedId,
     sessionState.ok ? sessionState.value : undefined,
+    scratch,
+    agent,
   );
 }
 
@@ -65,6 +70,8 @@ function renderContinueBrief(
   seedRef: string,
   seedId: string,
   sessionState?: SessionStateSnapshot,
+  scratch?: string,
+  agent?: string,
 ): string {
   const seed = index.objects.find((object) => object.id === seedId);
   const relatedNodes = prioritizeContinueNodes(
@@ -83,7 +90,7 @@ function renderContinueBrief(
   lines.push(`# Continuar: ${seed?.title ?? seedRef}`);
   lines.push("");
   if (sessionState) {
-    lines.push("## Estado del trabajo");
+    lines.push("## Estado actual compartido");
     lines.push(`- Work unit: **${sessionState.currentWorkUnit}**`);
     lines.push(`- Rama: \`${sessionState.currentBranch}\``);
     lines.push(`- Objetivo: ${sessionState.currentGoal}`);
@@ -91,8 +98,24 @@ function renderContinueBrief(
     lines.push(`- Completado: ${renderCompactList(sessionState.completed)}`);
     lines.push(`- Pendiente: ${renderCompactList(sessionState.pending)}`);
     lines.push(`- Próximo paso: ${sessionState.nextStep}`);
-    lines.push(`- Decisiones recientes: ${renderCompactList(sessionState.lastDecisions)}`);
     lines.push("");
+  }
+  if (scratch && agent) {
+    lines.push(`## Scratch del agente (${agent})`);
+    lines.push(scratch);
+    lines.push("");
+  }
+  if (sessionState) {
+    const decisions = (sessionState.decisionHistory ?? sessionState.lastDecisions.map((decision) => ({ heading: "", decision, context: undefined }))).slice(-5);
+    if (decisions.length > 0) {
+      lines.push("## Últimas decisiones");
+      for (const entry of decisions) {
+        if (entry.heading) lines.push(`### ${entry.heading}`);
+        lines.push(`- ${entry.decision}`);
+        if (entry.context) lines.push(`  - Contexto: ${entry.context}`);
+      }
+      lines.push("");
+    }
   }
   lines.push("## En qué estabas");
   lines.push(`- Estabas retomando **${seed?.title ?? seedRef}**.`);
@@ -145,6 +168,20 @@ function renderContinueBrief(
   }
 
   return lines.join("\n");
+}
+
+export function validateAgentName(agent: string): string | undefined {
+  if (!agent || agent.trim().length === 0 || agent.includes("/") || agent.includes("\\") || agent.includes("..")) {
+    return "agent must be a non-empty name without '/', '\\', or '..'.";
+  }
+  return undefined;
+}
+
+function readScratch(vaultRoot: string, agent: string): string | undefined {
+  const scratchPath = path.join(vaultRoot, "work", ".scratch", `${agent}.md`);
+  if (!fs.existsSync(scratchPath)) return undefined;
+  const content = fs.readFileSync(scratchPath, "utf8").trim();
+  return content || undefined;
 }
 
 function pickNodes(

@@ -9,7 +9,9 @@ export type SessionStateStatus =
   | "ready_for_review"
   | "ready_to_commit"
   | "published"
-  | "done";
+  | "done"
+  | "cancelled"
+  | "abandoned";
 
 export interface SessionStateSnapshot {
   readonly schemaVersion: number;
@@ -22,6 +24,20 @@ export interface SessionStateSnapshot {
   readonly pending: readonly string[];
   readonly nextStep: string;
   readonly lastDecisions: readonly string[];
+  readonly decisionHistory?: readonly SessionStateDecision[];
+}
+
+export interface SessionStateDecision {
+  readonly heading: string;
+  readonly decision: string;
+  readonly context?: string;
+}
+
+export interface NewSessionStateDecision {
+  readonly decision: string;
+  readonly branch: string;
+  readonly baseCommit: string;
+  readonly date: Date;
 }
 
 export interface SessionStateUpdateInput {
@@ -52,8 +68,15 @@ const SESSION_STATE_STATUSES = new Set<SessionStateStatus>([
   "ready_to_commit",
   "published",
   "done",
+  "cancelled",
+  "abandoned",
 ]);
+const CLOSING_SESSION_STATE_STATUSES = new Set<SessionStateStatus>(["published", "cancelled", "abandoned"]);
 const ISO_8601_TIMESTAMP = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?(Z|[+-](\d{2}):(\d{2}))$/;
+
+export function isClosingSessionStateStatus(status: string): status is Extract<SessionStateStatus, "published" | "cancelled" | "abandoned"> {
+  return CLOSING_SESSION_STATE_STATUSES.has(status as SessionStateStatus);
+}
 
 export function readSessionState(vaultRoot: string): SessionStateReadResult {
   const absPath = path.join(vaultRoot, SESSION_STATE_FILE);
@@ -75,7 +98,9 @@ export function readSessionState(vaultRoot: string): SessionStateReadResult {
       };
     }
 
-    const normalized = normalizeSessionState(parsed.body);
+    const normalized = parsed.body.includes("## Estado actual")
+      ? normalizeSessionStateV2(parsed.body)
+      : normalizeSessionState(parsed.body);
     if (!normalized.ok) {
       return {
         ok: false,
@@ -97,14 +122,14 @@ export function readSessionState(vaultRoot: string): SessionStateReadResult {
 export function normalizeSessionStateUpdate(input: SessionStateUpdateInput): SessionStateValidationResult {
   const schemaVersion = parseSchemaVersion(1);
   const updatedAt = parseIso8601Timestamp(input.updatedAt ?? new Date().toISOString(), "updated_at");
-  const currentWorkUnit = parseRequiredString(input.currentWorkUnit, "current_work_unit");
-  const currentBranch = parseRequiredString(input.currentBranch, "current_branch");
-  const currentGoal = parseRequiredString(input.currentGoal, "current_goal");
+  const currentWorkUnit = parseRequiredSingleLineString(input.currentWorkUnit, "work unit", "current_work_unit");
+  const currentBranch = parseRequiredSingleLineString(input.currentBranch, "branch", "current_branch");
+  const currentGoal = parseRequiredSingleLineString(input.currentGoal, "goal", "current_goal");
   const status = parseStatus(input.status);
-  const completed = parseStringList(input.completed, "completed");
-  const pending = parseStringList(input.pending, "pending");
-  const nextStep = parseRequiredString(input.nextStep, "next_step");
-  const lastDecisions = parseStringList(input.lastDecisions, "last_decisions");
+  const completed = parseStringList(input.completed, "completed", true);
+  const pending = parseStringList(input.pending, "pending", true);
+  const nextStep = parseRequiredSingleLineString(input.nextStep, "next step", "next_step");
+  const lastDecisions = parseStringList(input.lastDecisions, "last_decisions", true, "decision");
 
   if (!schemaVersion.ok) return schemaVersion;
   if (!updatedAt.ok) return updatedAt;
@@ -135,13 +160,17 @@ export function normalizeSessionStateUpdate(input: SessionStateUpdateInput): Ses
 }
 
 export function writeSessionState(vaultRoot: string, snapshot: SessionStateSnapshot): { readonly ok: true; readonly path: string } {
+  return writeSessionStateContent(vaultRoot, renderSessionState(snapshot));
+}
+
+export function writeSessionStateContent(vaultRoot: string, content: string): { readonly ok: true; readonly path: string } {
   const absPath = path.join(vaultRoot, SESSION_STATE_FILE);
   const dir = path.dirname(absPath);
   const tempPath = path.join(dir, `${path.basename(absPath)}.${process.pid}.${Date.now()}.tmp`);
 
   fs.mkdirSync(dir, { recursive: true });
   try {
-    fs.writeFileSync(tempPath, renderSessionState(snapshot), "utf8");
+    fs.writeFileSync(tempPath, content, "utf8");
     fs.renameSync(tempPath, absPath);
   } finally {
     if (fs.existsSync(tempPath)) {
@@ -150,6 +179,60 @@ export function writeSessionState(vaultRoot: string, snapshot: SessionStateSnaps
   }
 
   return { ok: true, path: absPath };
+}
+
+export function buildSessionStateV2Candidate(
+  currentContent: string,
+  snapshot: SessionStateSnapshot,
+  newDecision?: NewSessionStateDecision,
+): { readonly ok: true; readonly value: string } | { readonly ok: false; readonly message: string } {
+  const historyIndex = currentContent.indexOf("## Historial de decisiones");
+  if (historyIndex < 0) {
+    return { ok: false, message: "Session State must use the V2 format before it can be updated." };
+  }
+
+  const history = currentContent.slice(historyIndex);
+  const state = renderSessionStateV2State(snapshot);
+  const appendedHistory = newDecision
+    ? `${history.trimEnd()}\n\n${renderNewDecision(newDecision)}\n`
+    : history;
+  return { ok: true, value: `${state}\n\n${appendedHistory}` };
+}
+
+function renderSessionStateV2State(snapshot: SessionStateSnapshot): string {
+  const lines = [
+    "# Session State",
+    "",
+    "## Estado actual",
+    "",
+    `work_unit: ${quoteYamlString(snapshot.currentWorkUnit)}`,
+    `branch: ${quoteYamlString(snapshot.currentBranch)}`,
+    `objetivo_actual: ${quoteYamlString(snapshot.currentGoal)}`,
+    `estado: ${snapshot.status}`,
+    "completados:",
+  ];
+  pushYamlList(lines, snapshot.completed);
+  lines.push("pendientes:");
+  pushYamlList(lines, snapshot.pending);
+  lines.push(`proximo_paso: ${quoteYamlString(snapshot.nextStep)}`);
+  return lines.join("\n");
+}
+
+function pushYamlList(lines: string[], values: readonly string[]): void {
+  if (values.length === 0) {
+    lines[lines.length - 1] = `${lines[lines.length - 1]} []`;
+    return;
+  }
+  for (const value of values) lines.push(`  - ${quoteYamlString(value)}`);
+}
+
+function renderNewDecision(decision: NewSessionStateDecision): string {
+  const timestamp = decision.date.toISOString().slice(0, 16).replace("T", " ");
+  return [
+    `## ${timestamp} — ${decision.branch} — base ${decision.baseCommit}`,
+    "",
+    `decisión: ${decision.decision}`,
+  ].join("\n");
 }
 
 export function renderSessionState(snapshot: SessionStateSnapshot): string {
@@ -246,6 +329,58 @@ function normalizeSessionState(
   };
 }
 
+function normalizeSessionStateV2(
+  body: string,
+): SessionStateReadResult | { readonly ok: true; readonly value: SessionStateSnapshot } {
+  const lines = body.split(/\r?\n/);
+  if (lines[0]?.trim() !== "# Session State") {
+    return { ok: false, reason: "invalid", message: "Session State must start with a '# Session State' heading." };
+  }
+
+  const stateStart = lines.indexOf("## Estado actual");
+  const historyStart = lines.indexOf("## Historial de decisiones");
+  if (stateStart < 0 || historyStart < 0 || stateStart >= historyStart) {
+    return { ok: false, reason: "invalid", message: "Session State is missing one or more required V2 sections." };
+  }
+
+  const metadata = parseYamlMapping(lines.slice(stateStart + 1, historyStart).filter((line) => line.trim().length > 0), "Estado actual");
+  if (!metadata.ok) return metadata;
+
+  const currentWorkUnit = parseRequiredString(metadata.value.work_unit, "work_unit");
+  const currentBranch = parseRequiredString(metadata.value.branch, "branch");
+  const currentGoal = parseRequiredString(metadata.value.objetivo_actual, "objetivo_actual");
+  const status = parseStatus(metadata.value.estado);
+  const completed = parseStringList(metadata.value.completados, "completados");
+  const pending = parseStringList(metadata.value.pendientes, "pendientes");
+  const nextStep = parseRequiredString(metadata.value.proximo_paso, "proximo_paso");
+  if (!currentWorkUnit.ok) return currentWorkUnit;
+  if (!currentBranch.ok) return currentBranch;
+  if (!currentGoal.ok) return currentGoal;
+  if (!status.ok) return status;
+  if (!completed.ok) return completed;
+  if (!pending.ok) return pending;
+  if (!nextStep.ok) return nextStep;
+
+  const decisionHistory = parseDecisionHistory(lines.slice(historyStart + 1));
+  if (!decisionHistory.ok) return decisionHistory;
+  return {
+    ok: true,
+    value: {
+      schemaVersion: 2,
+      updatedAt: "",
+      currentWorkUnit: currentWorkUnit.value,
+      currentBranch: currentBranch.value,
+      currentGoal: currentGoal.value,
+      status: status.value,
+      completed: completed.value,
+      pending: pending.value,
+      nextStep: nextStep.value,
+      lastDecisions: decisionHistory.value.map((entry) => entry.decision),
+      decisionHistory: decisionHistory.value,
+    },
+  };
+}
+
 function parseMetadata(
   body: string,
 ): { readonly ok: true; readonly value: Record<string, unknown> } | { readonly ok: false; readonly reason: "invalid"; readonly message: string } {
@@ -276,13 +411,20 @@ function parseMetadata(
     };
   }
 
+  return parseYamlMapping(metadataLines, "metadata");
+}
+
+function parseYamlMapping(
+  lines: readonly string[],
+  label: string,
+): { readonly ok: true; readonly value: Record<string, unknown> } | { readonly ok: false; readonly reason: "invalid"; readonly message: string } {
   try {
-    const parsed = yaml.load(metadataLines.join("\n"), { schema: yaml.JSON_SCHEMA });
+    const parsed = yaml.load(lines.join("\n"), { schema: yaml.JSON_SCHEMA });
     if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
       return {
         ok: false,
         reason: "invalid",
-        message: "Session State metadata must be a mapping.",
+        message: `Session State ${label} must be a mapping.`,
       };
     }
 
@@ -291,9 +433,46 @@ function parseMetadata(
     return {
       ok: false,
       reason: "invalid",
-      message: `Invalid Session State metadata: ${(error as Error).message}`,
+      message: `Invalid Session State ${label}: ${(error as Error).message}`,
     };
   }
+}
+
+function parseDecisionHistory(
+  lines: readonly string[],
+): { readonly ok: true; readonly value: SessionStateDecision[] } | { readonly ok: false; readonly reason: "invalid"; readonly message: string } {
+  const entries: SessionStateDecision[] = [];
+  let current: { heading: string; decision?: string; context?: string } | undefined;
+  const headingPattern = /^## \d{4}-\d{2}-\d{2} \d{2}:\d{2} — .+ — base (?:legacy|[0-9a-f]+)$/;
+
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    if (headingPattern.test(line)) {
+      if (current) {
+        if (!current.decision) return { ok: false, reason: "invalid", message: "Session State decision history entry is missing decisión." };
+        entries.push({ heading: current.heading, decision: current.decision, context: current.context });
+      }
+      current = { heading: line.slice(3) };
+      continue;
+    }
+    if (!current) return { ok: false, reason: "invalid", message: "Session State decision history contains content outside an entry." };
+    if (line.startsWith("decisión: ")) {
+      current.decision = line.slice("decisión: ".length).trim();
+      continue;
+    }
+    if (line.startsWith("context: ")) {
+      current.context = line.slice("context: ".length).trim();
+      continue;
+    }
+    return { ok: false, reason: "invalid", message: "Session State decision history contains an invalid line." };
+  }
+
+  if (current) {
+    if (!current.decision) return { ok: false, reason: "invalid", message: "Session State decision history entry is missing decisión." };
+    entries.push({ heading: current.heading, decision: current.decision, context: current.context });
+  }
+  return { ok: true, value: entries };
 }
 
 function hasRequiredSections(body: string): boolean {
@@ -318,6 +497,13 @@ function parseRequiredString(value: unknown, key: string): { readonly ok: true; 
     return { ok: false, reason: "invalid", message: `Session State field "${key}" must be a non-empty string.` };
   }
   return { ok: true, value: value.trim() };
+}
+
+function parseRequiredSingleLineString(value: unknown, label: string, key: string): { readonly ok: true; readonly value: string } | { readonly ok: false; readonly reason: "invalid"; readonly message: string } {
+  if (typeof value === "string" && /[\r\n]/.test(value)) {
+    return { ok: false, reason: "invalid", message: `Session State ${label} must be a single line.` };
+  }
+  return parseRequiredString(value, key);
 }
 
 function parseIso8601Timestamp(value: unknown, key: string): { readonly ok: true; readonly value: string } | { readonly ok: false; readonly reason: "invalid"; readonly message: string } {
@@ -366,7 +552,7 @@ function parseStatus(value: unknown): { readonly ok: true; readonly value: Sessi
   return { ok: true, value: value as SessionStateStatus };
 }
 
-function parseStringList(value: unknown, key: string): { readonly ok: true; readonly value: string[] } | { readonly ok: false; readonly reason: "invalid"; readonly message: string } {
+function parseStringList(value: unknown, key: string, requireSingleLine = false, singleLineLabel = key): { readonly ok: true; readonly value: string[] } | { readonly ok: false; readonly reason: "invalid"; readonly message: string } {
   if (value === undefined || value === null) return { ok: true, value: [] };
   if (!Array.isArray(value)) {
     return { ok: false, reason: "invalid", message: `Session State field "${key}" must be a list of strings.` };
@@ -375,6 +561,9 @@ function parseStringList(value: unknown, key: string): { readonly ok: true; read
   for (const item of value) {
     if (typeof item !== "string" || item.trim().length === 0) {
       return { ok: false, reason: "invalid", message: `Session State field "${key}" must contain only non-empty strings.` };
+    }
+    if (requireSingleLine && /[\r\n]/.test(item)) {
+      return { ok: false, reason: "invalid", message: `Session State ${singleLineLabel} must be a single line.` };
     }
     items.push(item.trim());
   }

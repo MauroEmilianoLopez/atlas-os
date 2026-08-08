@@ -4,6 +4,7 @@
 import path from "node:path";
 import fs from "node:fs";
 import process from "node:process";
+import { execFileSync } from "node:child_process";
 import { Command } from "commander";
 import { runValidateCommand } from "./cli-validate.js";
 import { generateId } from "./id.js";
@@ -13,8 +14,8 @@ import { resolveSeed, loadCoreIndex, renderContextResult, CoreIndexNotBuiltError
 import { assembleContext } from "./core/context.js";
 import { runActivation, type ActivationEntry } from "./activation.js";
 import { SystemClock } from "./adapters/system-clock.js";
-import { runContinueCommand } from "./continue.js";
-import { normalizeSessionStateUpdate, writeSessionState, type SessionStateUpdateInput } from "./session-state.js";
+import { runContinueCommand, validateAgentName } from "./continue.js";
+import { buildSessionStateV2Candidate, isClosingSessionStateStatus, normalizeSessionStateUpdate, readSessionState, writeSessionStateContent, type SessionStateUpdateInput } from "./session-state.js";
 import { resolveVaultRoot } from "./vault.js";
 import { ID_PREFIX } from "./types.js";
 
@@ -290,9 +291,66 @@ session
       console.error(normalized.message);
       process.exit(1);
     }
+    if (!isClosingSessionStateStatus(normalized.value.status)) {
+      console.error("Session State updates require a closing status: published, cancelled, or abandoned.");
+      process.exit(1);
+    }
+
+    if (opts.decision.length > 1) {
+      console.error("Session State update accepts at most one --decision.");
+      process.exit(1);
+    }
+    const decision = opts.decision[0]?.trim();
+    if (opts.decision.length === 1 && !decision) {
+      console.error("Session State decision must be a non-empty string.");
+      process.exit(1);
+    }
+    const sessionStatePath = path.join(root, "work", "session-state.md");
+    const current = readSessionState(root);
+    if (!current.ok || current.value.schemaVersion !== 2) {
+      console.error(current.ok ? "Session State must use the V2 format before it can be updated." : current.message);
+      process.exit(1);
+    }
+
+    let baseCommit: string | undefined;
+    if (decision) {
+      try {
+        baseCommit = execFileSync("git", ["rev-parse", "--short", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
+      } catch {
+        console.error("Could not determine the base commit for the new Session State decision.");
+        process.exit(1);
+      }
+      if (!baseCommit) {
+        console.error("Could not determine the base commit for the new Session State decision.");
+        process.exit(1);
+      }
+    }
+
+    let currentContent: string;
+    try {
+      currentContent = fs.readFileSync(sessionStatePath, "utf8");
+    } catch (error) {
+      console.error((error as Error).message);
+      process.exit(1);
+    }
+    const candidate = buildSessionStateV2Candidate(currentContent, normalized.value, decision
+      ? { decision, branch: normalized.value.currentBranch, baseCommit: baseCommit!, date: new Date() }
+      : undefined);
+    if (!candidate.ok) {
+      console.error(candidate.message);
+      process.exit(1);
+    }
+
+    console.log(renderCompleteSessionStateDiff(currentContent, candidate.value));
+    process.stdout.write("Apply this Session State update? [y/N] ");
+    const approval = readApprovalLine();
+    if (approval !== "y" && approval !== "yes") {
+      console.log("\nSession State update canceled.");
+      process.exit(0);
+    }
 
     try {
-      const result = writeSessionState(root, normalized.value);
+      const result = writeSessionStateContent(root, candidate.value);
       console.log("Session State updated.");
       console.log(`File: ${path.relative(root, result.path).replace(/\\/g, "/")}`);
       process.exit(0);
@@ -302,16 +360,45 @@ session
     }
   });
 
+function readApprovalLine(): string {
+  const byte = Buffer.alloc(1);
+  const bytes: number[] = [];
+  try {
+    while (true) {
+      const bytesRead = fs.readSync(0, byte, 0, 1, null);
+      if (bytesRead === 0 || byte[0] === 0x0a) break;
+      if (byte[0] !== 0x0d) bytes.push(byte[0]);
+    }
+  } catch {
+    return "";
+  }
+  return Buffer.from(bytes).toString("utf8").trim().toLowerCase();
+}
+
+function renderCompleteSessionStateDiff(current: string, candidate: string): string {
+  if (current === candidate) return "No changes.";
+  const lines = ["--- work/session-state.md", "+++ work/session-state.md", "@@"];
+  for (const line of current.split(/\r?\n/)) lines.push(`-${line}`);
+  for (const line of candidate.split(/\r?\n/)) lines.push(`+${line}`);
+  return lines.join("\n");
+}
+
 // --- continue ---
 program
   .command("continue")
   .argument("<seed>", "seed reference: an id, a file slug, a path, or a title")
   .argument("[vault]", "path to the vault root")
+  .requiredOption("--agent <name>", "agent scratch state to read")
   .description("Create a compact Markdown brief to resume a work topic with any model")
-  .action((seed: string, vault: string | undefined) => {
+  .action((seed: string, vault: string | undefined, opts: { agent: string }) => {
+    const agentError = validateAgentName(opts.agent);
+    if (agentError) {
+      console.error(agentError);
+      process.exit(1);
+    }
     const root = requireVaultRoot(vault);
     try {
-      console.log(runContinueCommand(root, seed));
+      console.log(runContinueCommand(root, seed, opts.agent));
       process.exit(0);
     } catch (e) {
       if (e instanceof CoreIndexNotBuiltError) {

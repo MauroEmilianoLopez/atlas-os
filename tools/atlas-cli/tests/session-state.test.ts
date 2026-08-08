@@ -23,6 +23,57 @@ afterEach(() => {
 });
 
 describe("session state", () => {
+  it("reads the V2 shared state and preserves decision history order", () => {
+    mkdirSync(join(vault, "work"), { recursive: true });
+    writeFileSync(
+      join(vault, "work", "session-state.md"),
+      [
+        "# Session State",
+        "",
+        "## Estado actual",
+        "",
+        "work_unit: 'feature/session-update'",
+        "branch: 'feature/session-update'",
+        "objetivo_actual: 'Close the Session State update slice'",
+        "estado: published",
+        "completados:",
+        "  - 'Session State implemented'",
+        "pendientes: []",
+        "proximo_paso: 'Define the next Atlas slice'",
+        "",
+        "## Historial de decisiones",
+        "",
+        "## 2026-08-01 09:00 — feature/one — base aaa1111",
+        "",
+        "decisión: First decision",
+        "",
+        "context: First context.",
+        "",
+        "## 2026-08-02 10:00 — feature/two — base bbb2222",
+        "",
+        "decisión: Second decision",
+        "",
+        "context: Second context.",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const result = readSessionState(vault);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value).toMatchObject({
+      currentWorkUnit: "feature/session-update",
+      currentBranch: "feature/session-update",
+      currentGoal: "Close the Session State update slice",
+      status: "published",
+      completed: ["Session State implemented"],
+      pending: [],
+      nextStep: "Define the next Atlas slice",
+      lastDecisions: ["First decision", "Second decision"],
+    });
+  });
+
   it("round-trips a valid snapshot", () => {
     const snapshot: SessionStateSnapshot = {
       schemaVersion: 1,

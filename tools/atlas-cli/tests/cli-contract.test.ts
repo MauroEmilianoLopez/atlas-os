@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -15,9 +15,19 @@ let sandbox: string;
 let vault: string;
 
 function runCli(...args: string[]) {
+  return runCliWithInput(undefined, ...args);
+}
+
+function runCliWithInput(input: string | undefined, ...args: string[]) {
+  return runCliWithInputAndEnv(input, undefined, ...args);
+}
+
+function runCliWithInputAndEnv(input: string | undefined, env: NodeJS.ProcessEnv | undefined, ...args: string[]) {
   return spawnSync(process.execPath, [tsxCli, cliEntry, ...args], {
     cwd: cliRoot,
     encoding: "utf8",
+    input,
+    env: env ?? process.env,
   });
 }
 
@@ -212,8 +222,8 @@ describe("Atlas CLI compatibility contract", () => {
     });
   });
 
-  it("writes a Session State snapshot and makes continue render it first", () => {
-    const update = runCli(
+  it("updates V2 state after approval and makes continue render it first", () => {
+    const update = runCliWithInput("y\n",
       "session",
       "update",
       "--vault",
@@ -225,30 +235,189 @@ describe("Atlas CLI compatibility contract", () => {
       "--goal",
       "Automate the operational session snapshot",
       "--status",
-      "ready_to_commit",
+      "published",
       "--next-step",
       "Run the focused tests",
       "--completed",
       "atlas continue published",
       "--pending",
       "Review the writer contract",
-      "--decision",
-      "Session state lives outside the Core",
     );
 
     expect(update.status).toBe(0);
     expect(update.stderr).toBe("");
     expect(update.stdout).toContain("Session State updated.");
     expect(update.stdout).toContain("work/session-state.md");
-    expect(readFileSync(join(vault, "work", "session-state.md"), "utf8")).toContain("current_work_unit: 'feature/session-update'");
+    expect(readFileSync(join(vault, "work", "session-state.md"), "utf8")).toContain("work_unit: 'feature/session-update'");
 
-    const result = runCli("continue", "Atlas", vault);
+    const result = runCli("continue", "Atlas", vault, "--agent", "codex");
 
     expect(result.status).toBe(0);
     expect(result.stderr).toBe("");
-    expect(result.stdout.indexOf("## Estado del trabajo")).toBeLessThan(result.stdout.indexOf("## En qué estabas"));
+    expect(result.stdout.indexOf("## Estado actual compartido")).toBeLessThan(result.stdout.indexOf("## En qué estabas"));
     expect(result.stdout).toContain("- Work unit: **feature/session-update**");
     expect(result.stdout).toContain("- Próximo paso: Run the focused tests");
+  });
+
+  it("preserves the complete V2 decision history when no decision is supplied", () => {
+    const sessionStatePath = join(vault, "work", "session-state.md");
+    const before = readFileSync(sessionStatePath, "utf8");
+    const result = runCliWithInput("y\n", "session", "update", "--vault", vault, "--work-unit", "feature/v2", "--branch", "feature/v2", "--goal", "Update V2", "--status", "published", "--next-step", "Next");
+
+    expect(result.status).toBe(0);
+    const after = readFileSync(sessionStatePath, "utf8");
+    expect(after.slice(after.indexOf("## Historial de decisiones"))).toBe(before.slice(before.indexOf("## Historial de decisiones")));
+  });
+
+  it("appends one decision without changing the existing V2 history", () => {
+    const sessionStatePath = join(vault, "work", "session-state.md");
+    const before = readFileSync(sessionStatePath, "utf8");
+    expect(spawnSync("git", ["init"], { cwd: vault, encoding: "utf8" }).status).toBe(0);
+    expect(spawnSync("git", ["add", "."], { cwd: vault, encoding: "utf8" }).status).toBe(0);
+    expect(spawnSync("git", ["-c", "user.name=Atlas Test", "-c", "user.email=atlas@example.test", "commit", "-m", "fixture"], { cwd: vault, encoding: "utf8" }).status).toBe(0);
+    const result = runCliWithInput("y\n", "session", "update", "--vault", vault, "--work-unit", "feature/v2", "--branch", "feature/new", "--goal", "Update V2", "--status", "published", "--next-step", "Next", "--decision", "New decision");
+
+    expect(result.status).toBe(0);
+    const after = readFileSync(sessionStatePath, "utf8");
+    expect(after).toContain(before.slice(before.indexOf("## Historial de decisiones")).trimEnd());
+    expect(after).toMatch(/decisión: New decision/);
+  });
+
+  it("uses the actual short HEAD for a new decision", () => {
+    expect(spawnSync("git", ["init"], { cwd: vault, encoding: "utf8" }).status).toBe(0);
+    expect(spawnSync("git", ["add", "."], { cwd: vault, encoding: "utf8" }).status).toBe(0);
+    expect(spawnSync("git", ["-c", "user.name=Atlas Test", "-c", "user.email=atlas@example.test", "commit", "-m", "fixture"], { cwd: vault, encoding: "utf8" }).status).toBe(0);
+    const result = runCliWithInput("yes\n", "session", "update", "--vault", vault, "--work-unit", "feature/v2", "--branch", "feature/new", "--goal", "Update V2", "--status", "published", "--next-step", "Next", "--decision", "New decision");
+    const expectedHead = spawnSync("git", ["rev-parse", "--short", "HEAD"], { cwd: vault, encoding: "utf8" }).stdout.trim();
+
+    expect(result.status).toBe(0);
+    expect(readFileSync(join(vault, "work", "session-state.md"), "utf8")).toContain(`base ${expectedHead}`);
+  });
+
+  it("shows the full diff before the exact approval prompt", () => {
+    const result = runCliWithInput("n\n", "session", "update", "--vault", vault, "--work-unit", "feature/v2", "--branch", "feature/v2", "--goal", "Update V2", "--status", "published", "--next-step", "Next");
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("--- work/session-state.md");
+    expect(result.stdout.indexOf("--- work/session-state.md")).toBeLessThan(result.stdout.indexOf("Apply this Session State update? [y/N]"));
+  });
+
+  it("writes when approval is y", () => {
+    const path = join(vault, "work", "session-state.md");
+    const before = readFileSync(path, "utf8");
+    const result = runCliWithInput("y\n", "session", "update", "--vault", vault, "--work-unit", "feature/v2", "--branch", "feature/v2", "--goal", "Update V2", "--status", "published", "--next-step", "Next");
+    expect(result.status).toBe(0); expect(readFileSync(path, "utf8")).not.toBe(before);
+  });
+
+  it("writes when approval is yes", () => {
+    const path = join(vault, "work", "session-state.md");
+    const before = readFileSync(path, "utf8");
+    const result = runCliWithInput("YES\n", "session", "update", "--vault", vault, "--work-unit", "feature/v2", "--branch", "feature/v2", "--goal", "Update V2", "--status", "published", "--next-step", "Next");
+    expect(result.status).toBe(0); expect(readFileSync(path, "utf8")).not.toBe(before);
+  });
+
+  it.each<[string | undefined, string]>([["\n", "empty Enter"], ["n\n", "n"], [undefined, "EOF"]])("does not write when approval is %s", (input, _label) => {
+    const path = join(vault, "work", "session-state.md");
+    const before = readFileSync(path, "utf8");
+    const result = runCliWithInput(input, "session", "update", "--vault", vault, "--work-unit", "feature/v2", "--branch", "feature/v2", "--goal", "Update V2", "--status", "published", "--next-step", "Next");
+    expect(result.status).toBe(0); expect(result.stdout).toContain("Session State update canceled."); expect(readFileSync(path, "utf8")).toBe(before);
+  });
+
+  it("does not need Git when no decision is supplied", () => {
+    const result = runCliWithInput("y\n", "session", "update", "--vault", vault, "--work-unit", "feature/v2", "--branch", "feature/v2", "--goal", "Update V2", "--status", "published", "--next-step", "Next");
+    expect(result.status).toBe(0);
+  });
+
+  it("aborts before rendering or writing when Git cannot determine a new decision base", () => {
+    const path = join(vault, "work", "session-state.md");
+    const before = readFileSync(path, "utf8");
+    const result = runCliWithInputAndEnv("y\n", { ...process.env, PATH: "" }, "session", "update", "--vault", vault, "--work-unit", "feature/v2", "--branch", "feature/v2", "--goal", "Update V2", "--status", "published", "--next-step", "Next", "--decision", "New decision");
+    expect(result.status).toBe(1); expect(result.stderr).toContain("Could not determine the base commit"); expect(result.stdout).not.toContain("Apply this Session State update?"); expect(readFileSync(path, "utf8")).toBe(before);
+  });
+
+  it("reads only the approval line, without waiting for EOF", () => {
+    const path = join(vault, "work", "session-state.md");
+    const before = readFileSync(path, "utf8");
+    const result = runCliWithInput("y\ntrailing input", "session", "update", "--vault", vault, "--work-unit", "feature/v2", "--branch", "feature/v2", "--goal", "Update V2", "--status", "published", "--next-step", "Next");
+
+    expect(result.status).toBe(0);
+    expect(readFileSync(path, "utf8")).not.toBe(before);
+  });
+
+  it("resolves a new decision base from the vault root", () => {
+    const init = spawnSync("git", ["init"], { cwd: vault, encoding: "utf8" });
+    expect(init.status).toBe(0);
+    expect(spawnSync("git", ["add", "."], { cwd: vault, encoding: "utf8" }).status).toBe(0);
+    expect(spawnSync("git", ["-c", "user.name=Atlas Test", "-c", "user.email=atlas@example.test", "commit", "-m", "fixture"], { cwd: vault, encoding: "utf8" }).status).toBe(0);
+    const expectedHead = spawnSync("git", ["rev-parse", "--short", "HEAD"], { cwd: vault, encoding: "utf8" }).stdout.trim();
+
+    const result = runCliWithInput("y\n", "session", "update", "--vault", vault, "--work-unit", "feature/v2", "--branch", "feature/v2", "--goal", "Update V2", "--status", "published", "--next-step", "Next", "--decision", "New decision");
+
+    expect(result.status).toBe(0);
+    expect(readFileSync(join(vault, "work", "session-state.md"), "utf8")).toContain(`base ${expectedHead}`);
+  });
+
+  it.each(["active", "draft", "ready_for_review"])("rejects non-closing Session State status %s", (status) => {
+    const path = join(vault, "work", "session-state.md");
+    const before = readFileSync(path, "utf8");
+    const result = runCliWithInput("y\n", "session", "update", "--vault", vault, "--work-unit", "feature/v2", "--branch", "feature/v2", "--goal", "Update V2", "--status", status, "--next-step", "Next");
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(status === "draft" ? "Session State status must be one of:" : "Session State updates require a closing status");
+    expect(readFileSync(path, "utf8")).toBe(before);
+  });
+
+  it("rejects a multiline Session State decision before rendering or writing", () => {
+    const path = join(vault, "work", "session-state.md");
+    const before = readFileSync(path, "utf8");
+    const result = runCli("session", "update", "--vault", vault, "--work-unit", "feature/v2", "--branch", "feature/v2", "--goal", "Update V2", "--status", "published", "--next-step", "Next", "--decision", "First line\nSecond line");
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("Session State decision must be a single line.");
+    expect(result.stdout).not.toContain("Apply this Session State update?");
+    expect(readFileSync(path, "utf8")).toBe(before);
+  });
+
+  it.each(["feature/one\ntwo", "feature/one\rtwo"])("rejects a multiline Session State branch before rendering or writing", (branch) => {
+    const path = join(vault, "work", "session-state.md");
+    const before = readFileSync(path, "utf8");
+    const result = runCli("session", "update", "--vault", vault, "--work-unit", "feature/v2", "--branch", branch, "--goal", "Update V2", "--status", "published", "--next-step", "Next");
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("Session State branch must be a single line.");
+    expect(result.stdout).not.toContain("--- work/session-state.md");
+    expect(result.stdout).not.toContain("Apply this Session State update?");
+    expect(readFileSync(path, "utf8")).toBe(before);
+  });
+
+  it.each([
+    ["work unit", "--work-unit"],
+    ["goal", "--goal"],
+    ["next step", "--next-step"],
+    ["completed item", "--completed"],
+    ["pending item", "--pending"],
+  ] as const)("rejects a CR/LF Session State %s before rendering or writing", (_label, option) => {
+    for (const value of ["first\nsecond", "first\rsecond"]) {
+      const path = join(vault, "work", "session-state.md");
+      const before = readFileSync(path, "utf8");
+      const valueFor = (name: string, fallback: string): string => option === name ? value : fallback;
+      const args = [
+        "session", "update", "--vault", vault,
+        "--work-unit", valueFor("--work-unit", "feature/v2"),
+        "--branch", "feature/v2",
+        "--goal", valueFor("--goal", "Update V2"),
+        "--status", "published",
+        "--next-step", valueFor("--next-step", "Next"),
+      ];
+      if (option === "--completed" || option === "--pending") args.push(option, value);
+      const result = runCli(...args);
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("single line");
+      expect(result.stdout).not.toContain("--- work/session-state.md");
+      expect(result.stdout).not.toContain("Apply this Session State update?");
+      expect(readFileSync(path, "utf8")).toBe(before);
+    }
   });
 
   it("fails session update when a required field is missing without changing the snapshot", () => {
@@ -336,16 +505,16 @@ describe("Atlas CLI compatibility contract", () => {
   });
 
   it("creates a single Markdown brief for resuming a topic without requiring prior index or activation runs", () => {
-    const fromRepoRoot = runCliFrom(repositoryRoot, "continue", "Atlas");
-    const fromCliRoot = runCliFrom(cliRoot, "continue", "Atlas");
+    const fromRepoRoot = runCliFrom(repositoryRoot, "continue", "Atlas", "--agent", "codex");
+    const fromCliRoot = runCliFrom(cliRoot, "continue", "Atlas", "--agent", "codex");
 
     expect(fromRepoRoot.status).toBe(0);
     expect(fromRepoRoot.stderr).toBe("");
     expect(fromRepoRoot.stdout).toContain("# Continuar: Atlas OS");
-    expect(fromRepoRoot.stdout).toContain("## Estado del trabajo");
-    expect(fromRepoRoot.stdout).toContain("- Work unit: **feature/session-state**");
-    expect(fromRepoRoot.stdout).toContain("- Rama: `feature/cli-continue`");
-    expect(fromRepoRoot.stdout).toContain("- Próximo paso: Use atlas continue in daily work");
+    expect(fromRepoRoot.stdout).toContain("## Estado actual compartido");
+    expect(fromRepoRoot.stdout).toContain("- Work unit: **feature/session-update**");
+    expect(fromRepoRoot.stdout).toContain("- Rama: `feature/session-update`");
+    expect(fromRepoRoot.stdout).toContain("- Próximo paso: Define the next Atlas slice");
     expect(fromRepoRoot.stdout).toContain("## En qué estabas");
     expect(fromRepoRoot.stdout).toContain("## Próximo paso");
     expect(fromRepoRoot.stdout).toContain("## Decisiones vigentes");
@@ -358,7 +527,7 @@ describe("Atlas CLI compatibility contract", () => {
     expect(fromRepoRoot.stdout).toContain("- **ADR-001 — Usar IDs estables en vez de paths como identidad** (decision) — `work/decisions/adr-001-use-ids-over-paths.md`");
     expect(fromRepoRoot.stdout).toContain("- **Context Engine** (concept) — `knowledge/concepts/context-engine.md`");
     expect(fromRepoRoot.stdout).toContain("- **El contexto se construye, no se lee** (insight) — `knowledge/insights/context-is-not-memory.md`");
-    expect(fromRepoRoot.stdout.indexOf("## Estado del trabajo")).toBeLessThan(fromRepoRoot.stdout.indexOf("## En qué estabas"));
+    expect(fromRepoRoot.stdout.indexOf("## Estado actual compartido")).toBeLessThan(fromRepoRoot.stdout.indexOf("## En qué estabas"));
     expect(sectionLines(fromRepoRoot.stdout, "## Contexto relacionado")).toEqual([
       "- **ADR-001 — Usar IDs estables en vez de paths como identidad** (decision) — `work/decisions/adr-001-use-ids-over-paths.md`",
       "- **Context Engine** (concept) — `knowledge/concepts/context-engine.md`",
@@ -387,11 +556,11 @@ describe("Atlas CLI compatibility contract", () => {
     cpSync(fixtureVault, join(sandbox, "vault-no-state"), { recursive: true });
     rmSync(join(sandbox, "vault-no-state", "work", "session-state.md"), { force: true });
 
-    const result = runCliFrom(repositoryRoot, "continue", "Atlas", join(sandbox, "vault-no-state"));
+    const result = runCliFrom(repositoryRoot, "continue", "Atlas", join(sandbox, "vault-no-state"), "--agent", "codex");
 
     expect(result.status).toBe(0);
     expect(result.stderr).toBe("");
-    expect(result.stdout).not.toContain("## Estado del trabajo");
+    expect(result.stdout).not.toContain("## Estado actual compartido");
     expect(result.stdout).toContain("## En qué estabas");
     expect(result.stdout).toContain("## Contexto relacionado");
   });
@@ -399,21 +568,96 @@ describe("Atlas CLI compatibility contract", () => {
   it("keeps continue tolerant when Session State is corrupt", () => {
     writeFileSync(join(vault, "work", "session-state.md"), "this is not a valid session state", "utf8");
 
-    const result = runCliFrom(repositoryRoot, "continue", "Atlas", vault);
+    const result = runCliFrom(repositoryRoot, "continue", "Atlas", vault, "--agent", "codex");
 
     expect(result.status).toBe(0);
     expect(result.stderr).toBe("");
-    expect(result.stdout).not.toContain("## Estado del trabajo");
+    expect(result.stdout).not.toContain("## Estado actual compartido");
     expect(result.stdout).toContain("## En qué estabas");
     expect(result.stdout).toContain("## Contexto relacionado");
   });
 
   it("explains clearly when an explicit vault path does not exist", () => {
-    const result = runCliFrom(repositoryRoot, "continue", "Atlas", join(repositoryRoot, "missing-vault"));
+    const result = runCliFrom(repositoryRoot, "continue", "Atlas", join(repositoryRoot, "missing-vault"), "--agent", "codex");
 
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("No se encontró un vault válido.");
     expect(result.stderr).toContain(join(repositoryRoot, "missing-vault"));
     expect(result.stderr).toContain("Ejecuta el comando desde el repositorio o pasa explícitamente la ruta del vault.");
+  });
+
+  it("requires a safe explicit agent for continue", () => {
+    const missing = runCli("continue", "Atlas", vault);
+    expect(missing.status).toBe(1);
+    expect(missing.stderr).toContain("required option '--agent <name>' not specified");
+
+    for (const agent of ["", "claude/code", "claude\\code", ".."] as const) {
+      const result = runCli("continue", "Atlas", vault, "--agent", agent);
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("agent");
+    }
+  });
+
+  it("renders V2 shared state, non-empty scratch, and the latest five decisions before structural context", () => {
+    writeFileSync(
+      join(vault, "work", "session-state.md"),
+      [
+        "# Session State", "", "## Estado actual", "", "work_unit: 'feature/session-update'", "branch: 'feature/session-update'", "objetivo_actual: 'Close slice'", "estado: published", "completados:", "  - 'Done'", "pendientes: []", "proximo_paso: 'Next'", "", "## Historial de decisiones", "",
+        ...Array.from({ length: 6 }, (_, index) => [
+          `## 2026-08-0${index + 1} 10:00 — feature/test — base abc${index}`,
+          "",
+          `decisión: Decision ${index + 1}`,
+          "",
+          `context: Context ${index + 1}.`,
+          "",
+        ].join("\n")),
+      ].join("\n"),
+      "utf8",
+    );
+    mkdirSync(join(vault, "work", ".scratch"), { recursive: true });
+    writeFileSync(join(vault, "work", ".scratch", "codex.md"), "Scratch note", "utf8");
+
+    const result = runCli("continue", "Atlas", vault, "--agent", "codex");
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("## Estado actual compartido");
+    expect(result.stdout).toContain("## Scratch del agente (codex)");
+    expect(result.stdout).toContain("Scratch note");
+    expect(result.stdout).not.toContain("Decision 1");
+    for (const decision of ["Decision 2", "Decision 3", "Decision 4", "Decision 5", "Decision 6"]) {
+      expect(result.stdout).toContain(decision);
+    }
+    expect(result.stdout.indexOf("## Estado actual compartido")).toBeLessThan(result.stdout.indexOf("## Scratch del agente (codex)"));
+    expect(result.stdout.indexOf("## Scratch del agente (codex)")).toBeLessThan(result.stdout.indexOf("Decision 2"));
+    expect(result.stdout.indexOf("Decision 2")).toBeLessThan(result.stdout.indexOf("## En qué estabas"));
+  });
+
+  it("continues with scratch and structural context when V2 Session State is missing or corrupt", () => {
+    rmSync(join(vault, "work", "session-state.md"), { force: true });
+    mkdirSync(join(vault, "work", ".scratch"), { recursive: true });
+    writeFileSync(join(vault, "work", ".scratch", "codex.md"), "Scratch only", "utf8");
+
+    const missing = runCli("continue", "Atlas", vault, "--agent", "codex");
+    expect(missing.status).toBe(0);
+    expect(missing.stdout).toContain("Scratch only");
+    expect(missing.stdout).toContain("## En qué estabas");
+
+    writeFileSync(join(vault, "work", "session-state.md"), "corrupt", "utf8");
+    const corrupt = runCli("continue", "Atlas", vault, "--agent", "codex");
+    expect(corrupt.status).toBe(0);
+    expect(corrupt.stdout).toContain("Scratch only");
+    expect(corrupt.stdout).toContain("## En qué estabas");
+  });
+
+  it("omits a missing or empty agent scratch file without failing", () => {
+    const absent = runCli("continue", "Atlas", vault, "--agent", "codex");
+    expect(absent.status).toBe(0);
+    expect(absent.stdout).not.toContain("## Scratch del agente");
+
+    mkdirSync(join(vault, "work", ".scratch"), { recursive: true });
+    writeFileSync(join(vault, "work", ".scratch", "codex.md"), "  \n\t", "utf8");
+    const empty = runCli("continue", "Atlas", vault, "--agent", "codex");
+    expect(empty.status).toBe(0);
+    expect(empty.stdout).not.toContain("## Scratch del agente");
   });
 });
